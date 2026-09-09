@@ -21,7 +21,7 @@ export async function unlockGate(page: Page): Promise<void> {
  * Klickt sich durch Mikro-Freigabe und Kalibrierung (3 echte 3s-Schritte,
  * ausgewertet aus der Fake-Audio-Datei die Chromium ueber
  * --use-file-for-fake-audio-capture einspeist). Muss aufgerufen werden,
- * NACHDEM auf der Startseite Schnellsuche/Lobby-erstellen/Lobby-beitreten
+ * NACHDEM auf der Startseite Kläffkarussell/Lobby-erstellen/Lobby-beitreten
  * geklickt wurde.
  */
 export async function completeMicAndCalibration(page: Page): Promise<void> {
@@ -33,10 +33,10 @@ export async function completeMicAndCalibration(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Weiter" }).click();
 }
 
-export async function joinPublicQueue(page: Page): Promise<void> {
+export async function joinCarousel(page: Page): Promise<void> {
   await unlockGate(page);
   await page.goto("/");
-  await page.getByText("Schnellsuche").click();
+  await page.getByRole("button", { name: "Kläffkarussell" }).click();
   await completeMicAndCalibration(page);
 }
 

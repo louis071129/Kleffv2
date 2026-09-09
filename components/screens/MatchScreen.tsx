@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import type { AudioFrame } from "@klaeff/scoring";
+import { computeEnvelopeParams } from "@klaeff/bark-synth";
 import { Avatar } from "../Avatar";
 import { Button } from "../Button";
 import { Card } from "../Card";
@@ -10,6 +12,9 @@ import { EmoteBubble } from "../EmoteBubble";
 import { EmoteWheel } from "../EmoteWheel";
 import { useGameStore } from "../../lib/store/game-store";
 import { getAudioSession } from "../../lib/audio/session";
+import { getBarkSynthVoice } from "../../lib/audio/bark-synth-voice";
+import { base64ToBlob, isAudioRecordingSupported } from "../../lib/audio/recorder";
+import { getKlaeffClient } from "../../lib/ws-client";
 import { sfxRoundResult, sfxRoundStart } from "../../lib/audio/sfx";
 import { HAPTIC_ROUND_RESULT, HAPTIC_ROUND_START, vibrate } from "../../lib/haptics";
 
@@ -20,11 +25,14 @@ export function MatchScreen(): React.ReactElement {
   const playerId = useGameStore((s) => s.playerId);
   const currentRound = useGameStore((s) => s.currentRound);
   const lastRoundResult = useGameStore((s) => s.lastRoundResult);
+  const totalRounds = useGameStore((s) => s.totalRounds);
   const levels = useGameStore((s) => s.levels);
   const [barking, setBarking] = useState(false);
   const reducedMotion = useReducedMotion();
   const announcedRoundRef = useRef<number | null>(null);
   const announcedResultRoundRef = useRef<number | null>(null);
+  const synthFramesRef = useRef<AudioFrame[]>([]);
+  const audioPlaybackRef = useRef<HTMLAudioElement | null>(null);
 
   const players = lobby?.players ?? [];
   const barkerId = currentRound?.barkerPlayerId ?? null;
@@ -32,13 +40,19 @@ export function MatchScreen(): React.ReactElement {
   const audience = players.filter((p) => p.id !== barkerId);
   const isMyTurn = barkerId === playerId;
   const barkerLevel = barker ? (levels[barker.id] ?? 0) : 0;
+  const isSynthMode = lobby?.audioMode === "synth";
+  const isCarousel = lobby?.mode === "carousel";
 
   useEffect(() => {
     setBarking(false);
+    synthFramesRef.current = [];
     if (currentRound && announcedRoundRef.current !== currentRound.roundIndex) {
       announcedRoundRef.current = currentRound.roundIndex;
       sfxRoundStart();
       if (isMyTurn) vibrate(HAPTIC_ROUND_START);
+    }
+    if (!isMyTurn) {
+      getBarkSynthVoice().silence();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentRound?.roundIndex]);
@@ -48,14 +62,64 @@ export function MatchScreen(): React.ReactElement {
       announcedResultRoundRef.current = lastRoundResult.roundIndex;
       sfxRoundResult();
       vibrate(HAPTIC_ROUND_RESULT);
+      getBarkSynthVoice().silence();
     }
   }, [lastRoundResult]);
 
+  // Bark-Synth: rendert die live gestreamten Feature-Frames des Gegners -
+  // niemals die eigenen. Nur relevant, wenn diese Lobby ueberhaupt im
+  // Synth-Modus laeuft (Kläffkarussell, oder private Lobby ohne "Echter Ton").
+  useEffect(() => {
+    if (!isSynthMode) {
+      return;
+    }
+    const voice = getBarkSynthVoice();
+    voice.start();
+    const unsubscribe = getKlaeffClient().on("BARK_FRAME_BROADCAST", (msg) => {
+      if (msg.playerId === playerId) {
+        return; // niemals die eigene Stimme abspielen
+      }
+      synthFramesRef.current = [...synthFramesRef.current, msg.frame].slice(-200);
+      const envelope = computeEnvelopeParams(synthFramesRef.current);
+      voice.updateFrame(msg.frame, envelope.attackSharpness);
+    });
+    return () => {
+      unsubscribe();
+      voice.stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSynthMode]);
+
+  // Echter Ton: empfangene Aufnahme des Gegners abspielen.
+  useEffect(() => {
+    if (isSynthMode) {
+      return;
+    }
+    const unsubscribe = getKlaeffClient().on("AUDIO_BLOB_BROADCAST", (msg) => {
+      if (msg.playerId === playerId) {
+        return;
+      }
+      const blob = base64ToBlob(msg.dataBase64, msg.mimeType);
+      const url = URL.createObjectURL(blob);
+      audioPlaybackRef.current?.pause();
+      const audio = new Audio(url);
+      audioPlaybackRef.current = audio;
+      void audio.play().catch(() => {
+        // Autoplay kann blockiert sein - kein kritischer Pfad, das Scoring
+        // laeuft unabhaengig davon ueber die Feature-Frames.
+      });
+      audio.addEventListener("ended", () => URL.revokeObjectURL(url), { once: true });
+    });
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSynthMode]);
+
   async function handleBark(): Promise<void> {
-    if (!currentRound) return;
+    if (!currentRound || !lobby) return;
     setBarking(true);
     try {
-      await getAudioSession().captureBarkWindow(currentRound.windowMs);
+      const recordAudio = lobby.mode === "private" && lobby.audioMode === "real";
+      await getAudioSession().captureBarkWindow(currentRound.windowMs, currentRound.roundIndex, recordAudio);
     } finally {
       setBarking(false);
     }
@@ -71,8 +135,19 @@ export function MatchScreen(): React.ReactElement {
   return (
     <main className="mx-auto flex min-h-dvh max-w-lg flex-col items-center gap-6 px-5 py-8">
       <p className="text-xs uppercase tracking-wide text-[var(--muted)]">
-        Runde {(currentRound?.roundIndex ?? 0) + 1} / {players.length}
+        Runde {(currentRound?.roundIndex ?? 0) + 1} / {totalRounds ?? players.length}
       </p>
+
+      {isCarousel && (
+        <p className="rounded-full border-2 border-[var(--ink)] bg-[var(--violet)]/15 px-3 py-1 text-center text-[10px]">
+          🎙️→🐕 Kläffkarussell: niemand hört deine echte Stimme, nur den Bell-Sound
+        </p>
+      )}
+      {!isCarousel && lobby?.audioMode === "real" && (
+        <p className="rounded-full border-2 border-[var(--ink)] bg-[var(--bark)]/15 px-3 py-1 text-center text-[10px]">
+          🔊 Echter Ton: alle hier hören deine echte Aufnahme
+        </p>
+      )}
 
       <div className="flex w-full flex-1 flex-col items-center justify-center gap-4">
         {barker && (
@@ -119,9 +194,16 @@ export function MatchScreen(): React.ReactElement {
       </div>
 
       {isMyTurn && currentRound && (
-        <Button type="button" variant="lime" className="w-full text-xl" disabled={barking} onClick={handleBark}>
-          {barking ? "🐕 Bell läuft..." : "🐕 BELL!"}
-        </Button>
+        <>
+          {!isCarousel && lobby?.audioMode === "real" && !isAudioRecordingSupported() && (
+            <p className="text-center text-[10px] text-[var(--muted)]">
+              Dein Browser kann keine Sprachaufnahme - andere hören dich nicht, dein Score zählt trotzdem.
+            </p>
+          )}
+          <Button type="button" variant="lime" className="w-full text-xl" disabled={barking} onClick={handleBark}>
+            {barking ? "🐕 Bell läuft..." : "🐕 BELL!"}
+          </Button>
+        </>
       )}
 
       <AnimatePresence>

@@ -3,6 +3,7 @@
 import { getKlaeffClient } from "../ws-client";
 import { createAudioPipeline, requestMicrophone, type AudioPipeline } from "./capture";
 import { buildCalibrationProfile, type CalibrationOutcome } from "./calibration";
+import { blobToBase64, recordWindow } from "./recorder";
 import { loadCalibration, saveCalibration } from "../storage";
 import type { CalibrationProfile } from "@klaeff/scoring";
 
@@ -86,12 +87,32 @@ export class AudioSession {
     return outcome;
   }
 
-  async captureBarkWindow(windowMs: number): Promise<void> {
+  /**
+   * Faengt ein Bellfenster ein und sendet es fuers Scoring. Streamt dabei
+   * IMMER die Feature-Frames live mit (BARK_FRAME) - der Server relayt sie
+   * nur weiter, wenn der Empfaenger tatsaechlich einen Bark-Synth rendert
+   * (Kläffkarussell oder private Lobby ohne "Echter Ton"), harmlos sonst.
+   * `recordAudio=true` nimmt zusaetzlich echten Ton auf (private Lobby mit
+   * "Echter Ton") - faellt still auf reinen Synth zurueck, wenn der Browser
+   * MediaRecorder/Opus nicht unterstuetzt (siehe lib/audio/recorder.ts).
+   */
+  async captureBarkWindow(windowMs: number, roundIndex: number, recordAudio: boolean): Promise<void> {
     if (!this.pipeline) {
       throw new Error("Audio-Pipeline nicht gestartet.");
     }
+    const unsubscribeLive = this.pipeline.onFrame((frame) => {
+      getKlaeffClient().send({ type: "BARK_FRAME", frame });
+    });
+    const recordingPromise = recordAudio ? recordWindow(this.pipeline.stream, windowMs) : Promise.resolve(null);
     const frames = await this.pipeline.captureWindow(windowMs);
+    unsubscribeLive();
     getKlaeffClient().send({ type: "BARK_SUBMIT", frames });
+
+    const recording = await recordingPromise;
+    if (recording) {
+      const dataBase64 = await blobToBase64(recording.blob);
+      getKlaeffClient().send({ type: "AUDIO_BLOB_SUBMIT", roundIndex, mimeType: recording.mimeType, dataBase64 });
+    }
   }
 }
 

@@ -1,8 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { createPrivateLobby, joinPrivateLobby } from "./helpers";
 
-test.describe("Zwei-Spieler-Match (private Lobby)", () => {
-  test("zwei Spieler joinen per Code, spielen ein komplettes Match und sehen das Ergebnis", async ({ browser }) => {
+test.describe("Private Lobby: 2-Spieler-Duell mit echtem Ton", () => {
+  test("zwei Spieler joinen per Code, spielen ein komplettes Best-of-5-Duell mit echtem Ton und sehen das Ergebnis", async ({
+    browser,
+  }) => {
     const hostContext = await browser.newContext();
     const guestContext = await browser.newContext();
     const host = await hostContext.newPage();
@@ -17,14 +19,18 @@ test.describe("Zwei-Spieler-Match (private Lobby)", () => {
     await expect(host.getByText("2/8 Spieler")).toBeVisible({ timeout: 10000 });
     await expect(guest.getByText("2/8 Spieler")).toBeVisible({ timeout: 10000 });
 
+    // "Echter Ton" ist bei privaten Lobbys der Standard, siehe Auftrag.
+    await expect(host.getByText("🔊 Echter Ton", { exact: false })).toBeVisible();
+
     await host.getByRole("button", { name: "Match starten" }).click();
 
-    // Rundenreihenfolge = Beitrittsreihenfolge (siehe packages/protocol/src/match.ts):
-    // Host hat die Lobby erstellt und ist damit zuerst dran, dann der Gast. Explizit
-    // statt per isVisible()-Race erkannt: isVisible() wartet nicht, ist also anfaellig
-    // dafuer, VOR dem ROUND_STARTED-Broadcast auszuwerten und dann auf der falschen
-    // Seite auf einen Button zu warten, der dort nie erscheint (siehe BLOCKERS.md).
-    for (const barkerPage of [host, guest]) {
+    // Bei genau 2 Spielern startet automatisch der Duell-Modus: Best-of-5 =
+    // 5 Zyklen a 2 Spieler = 10 einzelne Bell-Runden. Rundenreihenfolge =
+    // Beitrittsreihenfolge (siehe packages/protocol/src/match.ts), also
+    // abwechselnd Host, Gast, Host, Gast, ... Explizit statt per isVisible()-
+    // Race erkannt, siehe BLOCKERS.md.
+    for (let round = 0; round < 10; round += 1) {
+      const barkerPage = round % 2 === 0 ? host : guest;
       const bellButton = barkerPage.getByRole("button", { name: /BELL!/u });
       await bellButton.waitFor({ state: "visible", timeout: 15000 });
       await bellButton.click();

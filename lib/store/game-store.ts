@@ -27,6 +27,7 @@ interface GameStoreState {
 
   lobby: LobbySnapshot | null;
   matchId: string | null;
+  totalRounds: number | null;
   currentRound: { roundIndex: number; barkerPlayerId: string; windowMs: number } | null;
   lastRoundResult: { roundIndex: number; playerId: string; score: BarkScore } | null;
   matchStandings: MatchStandings | null;
@@ -57,6 +58,8 @@ export const useGameStore = create<GameStoreState>((set, get) => {
 
     client.on("WELCOME", (msg) => set({ playerId: msg.playerId }));
 
+    client.on("CAROUSEL_QUEUED", () => set({ screen: "queue" }));
+
     client.on("LOBBY_STATE", (msg) => {
       const screen = get().screen;
       set({
@@ -67,7 +70,9 @@ export const useGameStore = create<GameStoreState>((set, get) => {
 
     client.on("COUNTDOWN_UPDATE", (msg) => set({ countdownSeconds: msg.secondsRemaining }));
 
-    client.on("MATCH_STARTED", (msg) => set({ matchId: msg.matchId, screen: "match", matchStandings: null }));
+    client.on("MATCH_STARTED", (msg) =>
+      set({ matchId: msg.matchId, totalRounds: msg.totalRounds, screen: "match", matchStandings: null }),
+    );
 
     client.on("ROUND_STARTED", (msg) =>
       set({
@@ -115,6 +120,7 @@ export const useGameStore = create<GameStoreState>((set, get) => {
 
     lobby: null,
     matchId: null,
+    totalRounds: null,
     currentRound: null,
     lastRoundResult: null,
     matchStandings: null,
@@ -138,7 +144,8 @@ export const useGameStore = create<GameStoreState>((set, get) => {
       const { deviceUuid, nickname, avatar } = get();
       getKlaeffClient().connect(deviceUuid, nickname || "Spieler", avatar);
     },
-    goHome: () => set({ screen: "home", lobby: null, matchId: null, currentRound: null, matchStandings: null }),
+    goHome: () =>
+      set({ screen: "home", lobby: null, matchId: null, totalRounds: null, currentRound: null, matchStandings: null }),
     setScreen: (screen) => set({ screen }),
     hydrate: () => {
       set({

@@ -12,11 +12,18 @@ import { HAPTIC_WIN, vibrate } from "../../lib/haptics";
 const PODIUM_HEIGHT: Record<number, string> = { 1: "9rem", 2: "6.5rem", 3: "4.5rem" };
 const PODIUM_ORDER = [2, 1, 3];
 
-export function ResultScreen({ onPlayAgain }: { readonly onPlayAgain: () => void }): React.ReactElement {
+export interface ResultScreenProps {
+  readonly onPlayAgain: () => void;
+  /** Nur fuer das Kläffkarussell relevant - "Verlassen" statt "Nochmal!" als zweite Option. */
+  readonly onLeave?: () => void;
+}
+
+export function ResultScreen({ onPlayAgain, onLeave }: ResultScreenProps): React.ReactElement {
   const lobby = useGameStore((s) => s.lobby);
   const standings = useGameStore((s) => s.matchStandings);
   const playerId = useGameStore((s) => s.playerId);
   const announced = useRef(false);
+  const isCarousel = lobby?.mode === "carousel";
 
   const players = lobby?.players ?? [];
   const podium = (standings ?? []).filter((s) => s.rank <= 3);
@@ -83,8 +90,13 @@ export function ResultScreen({ onPlayAgain }: { readonly onPlayAgain: () => void
       )}
 
       <Button type="button" variant="lime" className="w-full text-lg" onClick={onPlayAgain}>
-        Nochmal!
+        {isCarousel ? "🎠 Nächster Gegner" : "Nochmal!"}
       </Button>
+      {isCarousel && onLeave && (
+        <Button type="button" variant="secondary" className="w-full" onClick={onLeave}>
+          Kläffkarussell verlassen
+        </Button>
+      )}
     </main>
   );
 }

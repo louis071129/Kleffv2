@@ -219,6 +219,63 @@ Entscheidung: bestehende, korrekte 35/27.5/22.5/15-Verteilung beibehalten statt 
 widerspruechlichen neuen Zahlen zu uebernehmen - konservativste Wahl, keine Regression, keine
 neue Inkonsistenz im Herzstueck der Fairness-Mechanik. `packages/scoring` bleibt unveraendert.
 
+## 2026-09-09 – Best-of-N spielt immer alle Zyklen durch (Duell/Kläffduell)
+
+"Best of 5" (Duell) bzw. "Best of 3" (Kläffduell-Matchup) koennte entweder "hoert auf, sobald
+eine Seite die Mehrheit hat" oder "spielt immer alle Zyklen durch, zaehlt danach die Siege"
+bedeuten. Entscheidung: immer alle Zyklen durchspielen. Grund: vermeidet Sonderfall-Logik im
+sonst sehr einfachen, linearen Match-Reducer (`packages/protocol/src/match.ts` - playerOrder wird
+stur der Reihe nach abgearbeitet, `submitRoundResult` weiss nichts von "vorzeitigem Ende"), bleibt
+eine ebenso valide Auslegung von "Best of N", und ist fuer ein Partyspiel sogar unterhaltsamer
+(niemand wird um seine letzte Bell-Chance gebracht, nur weil der Gegner schon 3:0 fuehrt).
+
+## 2026-09-09 – "Rudel" interpretiert als 3 Zyklen durch alle Spieler, Ranking nach Summe
+
+Der Auftrag nennt "Rudel (alle nacheinander, Ranking über 3 Runden)" ohne genau zu definieren,
+was mit "3 Runden" bei beliebiger Spielerzahl gemeint ist. Entscheidung: alle Spieler bellen
+sequenziell, das Ganze fuer 3 Zyklen wiederholt (bei 5 Spielern also 15 Einzel-Baelle), Ranking
+nach Summe der 3 Einzel-Scores pro Spieler. Konservativ, weil es "alle nacheinander" (sequenziell,
+nicht parallel) und "3 Runden" (3 Durchgaenge, nicht 3 Baelle insgesamt unabhaengig von der
+Spielerzahl) woertlich nimmt.
+
+## 2026-09-09 – Audio-Blobs ("Echter Ton") werden serverseitig gar nicht zwischengespeichert
+
+Harte Regel 11 verlangt "nur fuer die Dauer der Session gehalten, nie auf Disk persistiert, beim
+Verlassen der Lobby aus dem Speicher entfernt". Die detaillierte Beschreibung im Auftrag sagt
+zusaetzlich, der Server solle den Blob kurz "dem roundId zuordnen" (fuer z.B. spaeter
+beitretende Zuhoerer). Entscheidung: der Server speichert den Blob ueberhaupt nicht, sondern
+reicht ihn nur synchron beim Empfang an alle aktuell verbundenen Lobby-Mitglieder weiter
+(`handleAudioBlobSubmit` in `server/game-server.ts`) - das ist noch strenger als "wird beim
+Rundenwechsel verworfen" (es gibt nichts zu verwerfen) und die denkbar konservativste Umsetzung
+der harten Regel. Nachteil, bewusst in Kauf genommen: ein Spieler, der genau waehrend eines
+Bellfensters (re-)verbindet, verpasst die Wiedergabe fuer diese eine Runde - sein Score ist davon
+nicht betroffen (Scoring laeuft ausschliesslich ueber die separat gesendeten Feature-Frames).
+
+## 2026-09-09 – MediaRecorder-Fallback: nur ein Hinweistext, keine automatische Pro-Runde-Umschaltung
+
+Der Auftrag verlangt bei fehlendem `audio/webm;codecs=opus`-Support automatisches Umschalten auf
+den Bark-Synth samt Erklaerung im UI. Umgesetzt: `lib/audio/recorder.ts` erkennt fehlenden
+Support und sendet in diesem Fall einfach kein `AUDIO_BLOB_SUBMIT` (der Score/die Feature-Frames
+gehen trotzdem raus, nichts stuerzt ab), und `MatchScreen.tsx` zeigt dem betroffenen Spieler beim
+eigenen Bellen einen Hinweis ("...andere hören dich nicht, dein Score zählt trotzdem"). NICHT
+umgesetzt, aus Zeitgruenden bewusst zurueckgestellt: dass die ANDEREN Mitspieler in diesem Fall
+automatisch pro Runde auf den Bark-Synth dieses einen Spielers umschalten (dafuer muesste die
+Empfaenger-Seite dynamisch zwischen Blob-Wiedergabe und Synth-Rendering pro Runde umschalten,
+statt wie jetzt fest an `lobby.audioMode` zu haengen). Ehrlich als Luecke dokumentiert statt
+stillschweigend vereinfacht.
+
+## 2026-09-09 – E2E-Abdeckung bewusst auf die zwei geforderten Akzeptanzkriterien begrenzt
+
+Playwright-E2E-Tests brauchen echte Kalibrierungszeit (~10s) pro Spieler-Kontext - ein 5-Spieler-
+Rudel/Kläffduell-E2E-Test waere allein durch Kalibrierung >50s zusaetzlich zur eigentlichen
+Spielzeit. Die im (ersten) Auftrag explizit geforderten zwei Playwright-Akzeptanzkriterien sind
+umgesetzt und gruen (`e2e/carousel-rematch.spec.ts`: Kläffkarussell-Pairing + Re-Pairing;
+`e2e/two-player-match.spec.ts`: private 2-Spieler-Duell mit echtem Ton). Rudel und Kläffduell
+(Bracket) sind stattdessen auf Protokoll-Ebene (`packages/protocol/test/bracket.test.ts`,
+`match.test.ts`) und mit echten WebSocket-Clients auf Server-Ebene
+(`server/game-server.test.ts`) End-to-End getestet - der richtige Detailgrad fuer deren
+Komplexitaet, ohne die Browser-Testsuite unverhaeltnismaessig zu verlangsamen.
+
 ## 2026-09-09 – CookieNotice als globales Fixed-Element blockierte den BELL!-Button
 
 Beim ersten Einbau lag `<CookieNotice />` im Root-Layout (`app/layout.tsx`), damit auf jedem

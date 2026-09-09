@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { HomeScreen } from "./screens/HomeScreen";
 import { MicPermissionScreen } from "./screens/MicPermissionScreen";
 import { CalibrationScreen } from "./screens/CalibrationScreen";
+import { CarouselQueueScreen } from "./screens/CarouselQueueScreen";
 import { LobbyScreen } from "./screens/LobbyScreen";
 import { MatchScreen } from "./screens/MatchScreen";
 import { ResultScreen } from "./screens/ResultScreen";
@@ -87,9 +88,29 @@ export function GameApp({ initialCode }: { readonly initialCode?: string }): Rea
     setLocalStep("home");
   }
 
+  if (screen === "queue") {
+    return (
+      <CarouselQueueScreen
+        onLeave={() => {
+          getKlaeffClient().send({ type: "CAROUSEL_LEAVE" });
+          goHome();
+        }}
+      />
+    );
+  }
   if (screen === "lobby") return <LobbyScreen onLeave={goHome} />;
   if (screen === "match") return <MatchScreen />;
-  if (screen === "result") return <ResultScreen onPlayAgain={goHome} />;
+  if (screen === "result") {
+    return (
+      <ResultScreen
+        onPlayAgain={() => proceed({ type: "CAROUSEL_JOIN" })}
+        onLeave={() => {
+          getKlaeffClient().send({ type: "CAROUSEL_LEAVE" });
+          goHome();
+        }}
+      />
+    );
+  }
 
   if (localStep === "mic") {
     return (

@@ -40,6 +40,8 @@ export async function requestMicrophone(): Promise<MicPermissionResult> {
 export interface AudioPipeline {
   readonly audioContext: AudioContext;
   readonly agcActive: boolean;
+  /** Roher Mikrofon-Stream, fuer den optionalen MediaRecorder-Pfad in privaten Lobbys ("Echter Ton"). */
+  readonly stream: MediaStream;
   /** Letzter empfangener Frame, fuer den kontinuierlichen Pegel-Broadcast. */
   getLatestFrame(): AudioFrame | null;
   /** Abonniert jeden neuen Frame (50 Hz), z.B. fuer Kalibrierung oder Pegelanzeige. */
@@ -87,6 +89,7 @@ export async function createAudioPipeline(mic: MicPermissionResult): Promise<Aud
   return {
     audioContext,
     agcActive: mic.agcActive,
+    stream: mic.stream,
     getLatestFrame: () => latestFrame,
     onFrame: (callback) => {
       subscribers.add(callback);

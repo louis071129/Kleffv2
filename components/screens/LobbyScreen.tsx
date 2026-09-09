@@ -95,12 +95,87 @@ export function LobbyScreen({ onLeave }: { readonly onLeave: () => void }): Reac
         {lobby.players.length}/{lobby.maxPlayers} Spieler
       </p>
 
+      {lobby.mode === "private" && lobby.audioMode === "real" && (
+        <p className="rounded-full border-2 border-[var(--ink)] bg-[var(--bark)]/15 px-3 py-1 text-center text-[10px]">
+          🔊 Echter Ton: alle hier hören deine echte Aufnahme. Gilt nur in dieser Lobby.
+        </p>
+      )}
+
+      {lobby.mode === "private" && isHost && lobby.phase === "waiting" && (
+        <Card shadowColor="var(--violet)" className="flex flex-col gap-3">
+          <p className="text-xs font-semibold uppercase tracking-wide">Host-Einstellungen</p>
+
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm">Spielerzahl-Limit</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="klaeff-btn klaeff-btn--secondary min-h-[36px] min-w-[36px] px-0 py-0"
+                disabled={lobby.maxPlayers <= Math.max(2, lobby.players.length)}
+                onClick={() => getKlaeffClient().send({ type: "LOBBY_SET_MAX_PLAYERS", maxPlayers: lobby.maxPlayers - 1 })}
+              >
+                −
+              </button>
+              <span className="w-6 text-center font-display">{lobby.maxPlayers}</span>
+              <button
+                type="button"
+                className="klaeff-btn klaeff-btn--secondary min-h-[36px] min-w-[36px] px-0 py-0"
+                disabled={lobby.maxPlayers >= 8}
+                onClick={() => getKlaeffClient().send({ type: "LOBBY_SET_MAX_PLAYERS", maxPlayers: lobby.maxPlayers + 1 })}
+              >
+                +
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm">Echter Ton</span>
+            <button
+              type="button"
+              className={`klaeff-btn min-h-[36px] px-3 py-1 text-xs ${lobby.audioMode === "real" ? "klaeff-btn--lime" : "klaeff-btn--secondary"}`}
+              onClick={() =>
+                getKlaeffClient().send({
+                  type: "LOBBY_SET_AUDIO_MODE",
+                  audioMode: lobby.audioMode === "real" ? "synth" : "real",
+                })
+              }
+            >
+              {lobby.audioMode === "real" ? "An" : "Aus (Bark-Synth)"}
+            </button>
+          </div>
+
+          {lobby.players.length >= 3 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-sm">Modus (ab 3 Spielern Pflicht)</span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className={`klaeff-btn flex-1 min-h-[36px] px-2 py-1 text-xs ${lobby.matchMode === "bracket" ? "klaeff-btn--lime" : "klaeff-btn--secondary"}`}
+                  onClick={() => getKlaeffClient().send({ type: "LOBBY_SET_MATCH_MODE", matchMode: "bracket" })}
+                >
+                  Kläffduell (K.o.)
+                </button>
+                <button
+                  type="button"
+                  className={`klaeff-btn flex-1 min-h-[36px] px-2 py-1 text-xs ${lobby.matchMode === "rudel" ? "klaeff-btn--lime" : "klaeff-btn--secondary"}`}
+                  onClick={() => getKlaeffClient().send({ type: "LOBBY_SET_MATCH_MODE", matchMode: "rudel" })}
+                >
+                  Rudel (Ranking)
+                </button>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
       {lobby.mode === "private" && isHost && (
         <Button
           type="button"
           variant="lime"
           className="w-full text-lg"
-          disabled={lobby.players.length < lobby.minPlayersToStart}
+          disabled={
+            lobby.players.length < lobby.minPlayersToStart || (lobby.players.length >= 3 && lobby.matchMode === null)
+          }
           onClick={() => getKlaeffClient().send({ type: "LOBBY_START" })}
         >
           Match starten
