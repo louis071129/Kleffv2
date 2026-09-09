@@ -11,7 +11,16 @@ Wege, das zu tun:
   (`packages/bark-synth`).
 - **Private Lobby** – Code-basiert, nur mit eingeladenen Leuten. Hier läuft standardmäßig
   echter, unveränderter Ton. Flexible Spielerzahl (2–8), vom Host konfigurierbar: Duell
-  (2 Spieler, Best-of-5), Kläffduell (K.-o.-Bracket) oder Rudel (Ranking über 3 Runden).
+  (2 Spieler), Kläffduell (K.-o.-Bracket) oder Rudel (Ranking über 3 Runden).
+
+Jede echte 1v1-Situation (Kläffkarussell-Begegnung, Duell, jedes Kläffduell-Matchup) ist ein
+**Tauzieh**: eine Skala von -100 (Gegner führt voll) bis +100 (ich führe voll), jeder Bark
+zieht sie um `score.total - 50` zur eigenen Seite, das Match endet sofort und sichtbar, sobald
+eine Seite ±100 erreicht (`packages/protocol/src/tug-of-war.ts`). Kein fester Rundenzähler,
+kein Unentschieden, nie ein zufälliges Ergebnis – bei echtem Gleichstand entscheidet ab Runde
+14 deterministisch die erste Runde, die das Patt bricht (Sudden-Death-Fallback, nicht
+Zufall). Rudel ist kein 2-Seiten-System (3+ Spieler) und bleibt daher ein Ranking über 3
+Zyklen, bekommt aber dieselbe Live-Rangliste als Fortschrittselement (`components/RudelProgress.tsx`).
 
 ## Schnellstart
 
@@ -85,12 +94,13 @@ Nachrichten vom `KlaeffClient` (`lib/ws-client.ts`) reagiert.
 4. **Kläffkarussell**: sofortiges 1v1 mit dem am längsten wartenden Gegner, kein Countdown.
    *Oder* **Private Lobby**: 6-stelliger Code, Host konfiguriert Spielerzahl (2–8), Modus
    und "Echter Ton", startet manuell.
-5. **Match**: abwechselnd/nacheinander wird gebellt (Kläffkarussell: 1 Runde pro Spieler;
-   Duell: Best-of-5; Rudel: 3 Runden pro Spieler; Kläffduell: Best-of-3 pro K.-o.-Matchup).
-   Der Server wertet jede Runde sofort aus und broadcastet das Ergebnis an alle.
-6. **Ergebnis**: Podium/Rangliste. Im Kläffkarussell "Nächster Gegner" (neue Begegnung) oder
-   "Kläffkarussell verlassen"; in privaten Lobbys "Nochmal!" zurück in die Lobby – jeweils
-   ohne erneute Kalibrierung.
+5. **Match**: abwechselnd/nacheinander wird gebellt. Kläffkarussell, Duell und jedes
+   Kläffduell-Matchup sind Tauzieh (dynamische Rundenzahl, endet sofort bei ±100 auf der
+   Seil-Skala); Rudel bleibt bei 3 Runden pro Spieler, Ranking nach Score-Summe. Der Server
+   wertet jede Runde sofort aus und broadcastet das Ergebnis an alle.
+6. **Ergebnis**: Tauzieh-Matches zeigen sofort SIEG!/NIEDERLAGE, Rudel ein Podium/Rangliste.
+   Im Kläffkarussell "Nächster Gegner" (neue Begegnung) oder "Kläffkarussell verlassen"; in
+   privaten Lobbys "Nochmal!" zurück in die Lobby – jeweils ohne erneute Kalibrierung.
 
 ## Fairness – warum die Kalibrierung so kompliziert ist
 
@@ -178,12 +188,13 @@ ein In-Memory-Ringpuffer (500 Einträge) ohne Persistenz über einen Server-Neus
   Host-Übernahme wenn der Host geht. Standardmäßig läuft **echter Ton** (komprimierte
   Aufnahme pro Bellfenster, `MediaRecorder`/Opus, `lib/audio/recorder.ts`) – der Host kann das
   jederzeit auf den Bark-Synth umschalten. Modus:
-  - **Duell** (automatisch bei genau 2 Spielern): Best-of-5, abwechselnd, Rundensieger zählt.
+  - **Duell** (automatisch bei genau 2 Spielern): Tauzieh, abwechselnd, endet sofort bei ±100
+    auf der Seil-Skala.
   - **Rudel** (Host wählt, ab 3 Spielern): alle nacheinander, das für 3 Zyklen, Ranking nach
     Score-Summe.
   - **Kläffduell** (Host wählt, ab 3 Spielern): echtes K.-o.-Bracket
-    (`packages/protocol/src/bracket.ts`, zufällige Paarung, Freilos bei ungerader Zahl),
-    Best-of-3 pro Matchup, Matchups laufen sequenziell (alle sehen zu).
+    (`packages/protocol/src/bracket.ts`, zufällige Paarung, Freilos bei ungerader Zahl), jedes
+    Matchup ein Tauzieh, Matchups laufen sequenziell (alle sehen zu).
 - **Kein Freitext-Chat.** Nur ein Emote-Rad mit 8 festen Reaktionen, live über der Avatarkarte
   angezeigt.
 - **Nickname-Filter** (deutsch/englisch, Leetspeak-normalisiert) ersetzt gesperrte Namen durch
@@ -229,18 +240,25 @@ framegleich).
 - **`packages/bark-synth`**: 17 Unit-Tests für die Mapping-Mathematik (Tonhöhe bleibt im
   200–900Hz-Zielbereich auch bei Extremwerten, Determinismus, keine NaN/Infinity bei Stille).
 - **`packages/protocol`**: Unit-Tests für Lobby-Reducer, Kläffkarussell-Warteschlange,
-  Match-/Duell-/Rudel-Standings, Kläffduell-Bracket (Pairing, Freilose, K.-o.-Progression),
-  Nickname-Filter, Report-Schwelle, Lobby-Codes, Zod-Schemas – alles ohne Netzwerk.
+  Match-/Rudel-Standings, Tauzieh-Kernmechanik (`tug-of-war.ts`: neutraler Start, Schwelle,
+  deterministischer Sudden-Death-Tiebreak, Determinismus), Kläffduell-Bracket (Pairing,
+  Freilose, K.-o.-Progression), Nickname-Filter, Report-Schwelle, Lobby-Codes, Zod-Schemas –
+  alles ohne Netzwerk.
 - **`server`**: 18 Integrationstests mit echten `ws`-Clients gegen einen echten
   `http`+`WebSocketServer` (Kläffkarussell-Pairing bei 2/4/6 Wartenden, Re-Pairing, aktives
   Verlassen, Live-Frame-Relay, Melde-Schwelle; private Lobby: Duell/Rudel/Kläffduell komplett
-  durchgespielt, Echter-Ton-Relay inkl. Abschalten, Host-Übernahme, Disconnect/Reconnect,
-  doppelter Join derselben UUID, Rundentimeout, Nickname-Filter).
+  durchgespielt – Duell/Kläffkarussell/Kläffduell-Matchups über deterministisch stark
+  unterschiedliche Scores bis zur Tauzieh-Schwelle gespielt statt über feste Rundenzahlen –,
+  Echter-Ton-Relay inkl. Abschalten, Host-Übernahme, Disconnect/Reconnect, doppelter Join
+  derselben UUID, Rundentimeout, Nickname-Filter).
 - **`e2e`**: Playwright mit `--use-fake-device-for-media-stream` und einer echten (synthetisch
   erzeugten) WAV-Datei als Mikro-Input – kompletter Kläffkarussell-Durchlauf inkl. Re-Pairing,
-  privates Best-of-5-Duell mit echtem Ton, iPad-Screenshots in beiden Ausrichtungen, ein
-  Performance-Rauchtest. Rudel/Kläffduell bewusst nur auf Protokoll-/Server-Ebene getestet,
-  nicht per Browser-E2E (siehe BLOCKERS.md).
+  privates Tauzieh-Duell mit echtem Ton, iPad-Screenshots in beiden Ausrichtungen, ein
+  Performance-Rauchtest. Beide Tauzieh-Matches laufen dynamisch bis SIEG!/NIEDERLAGE
+  (`playTugOfWarUntilResult` in `e2e/helpers.ts`) statt über eine feste Rundenzahl – alle
+  E2E-Kontexte teilen dieselbe Fake-Audio-Datei, das Match wird also über den deterministischen
+  Sudden-Death-Fallback entschieden. Rudel/Kläffduell bewusst nur auf Protokoll-/Server-Ebene
+  getestet, nicht per Browser-E2E (siehe BLOCKERS.md).
 
 `npm run verify` fasst Lint+Typecheck+Test zusammen und läuft vor jedem Commit.
 

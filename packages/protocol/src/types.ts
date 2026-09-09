@@ -78,8 +78,6 @@ export interface Standing {
   readonly rank: number;
   /** Repraesentatives Einzelergebnis (fuer Breakdown-Anzeige) - bei Rudel das beste der Runden. */
   readonly result: RoundResult | null;
-  /** Rundensiege bei Duell/Kläffduell (Best-of-N), sonst null. */
-  readonly wins: number | null;
   /** Summe der Einzel-Scores bei Rudel (mehrere Runden pro Spieler), sonst null. */
   readonly aggregateTotal: number | null;
 }

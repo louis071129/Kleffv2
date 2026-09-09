@@ -322,3 +322,19 @@ und nichts Zeitkritisches ueberdeckt (`HomeScreen`, `app/gate/page.tsx`) - analo
 bestehenden Muster fuer `LegalFooter`. Nach dem Fix: komplette E2E-Suite (10 Tests) wieder gruen.
 Wieder ein Beleg dafuer, dass ein neuer Test nicht nur sich selbst, sondern auch bestehende
 Tests gegen die volle Suite laufen muss, bevor er als "fertig" gilt.
+
+## 2026-09-09 – Tauzieh: Rueckfrage zum Geltungsbereich statt Annahme
+
+Der Auftrag ("Tauzieh-System mit Skala, klar erkennbarer Sieg, kein Zufall") beschreibt naturgemaess
+ein 2-Seiten-System - Tauzieh mit 3+ Spielern (Rudel) ergibt keinen Sinn. Statt anzunehmen, welche
+Modi gemeint sind, per `AskUserQuestion` nachgefragt (live Session, Nutzer anwesend - dieselbe
+Abwaegung wie beim Kläffkarussell-Rueckbau weiter oben). Antwort: Kläffkarussell + Duell +
+Kläffduell-Matchups (alle echten 1v1-Situationen) werden Tauzieh; Rudel bleibt Ranking ueber
+mehrere Zyklen, bekommt aber ein aehnlich klares Live-Fortschrittselement (`RudelProgress`) statt
+Tauzieh selbst zu werden.
+
+Zweite, kleinere Entscheidung ohne Rueckfrage getroffen: das `wins`-Feld auf `Standing` war nach
+dem Umbau in der gesamten Codebase permanent `null` (frueher Rundensiege beim Best-of-N-Duell,
+das es nicht mehr gibt). Statt es als totes Feld im Wire-Protokoll zu belassen, komplett entfernt
+(Schema, Typen, Server, alle Standings-Konstruktoren) - kein Verhaltensunterschied, nur weniger
+irrefuehrender Code. Siehe PROGRESS.md fuer den vollen Umbau.

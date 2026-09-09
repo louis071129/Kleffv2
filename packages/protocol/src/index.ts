@@ -6,6 +6,7 @@ export * from "./lobby.js";
 export * from "./lobby-code.js";
 export * from "./carousel.js";
 export * from "./bracket.js";
+export * from "./tug-of-war.js";
 export * from "./match.js";
 export * from "./nickname-filter.js";
 export * from "./report.js";

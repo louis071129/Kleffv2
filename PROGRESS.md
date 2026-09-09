@@ -580,3 +580,49 @@ Server-Ebene statt zusätzlich per Browser-E2E getestet.
 `npm run verify`, `npm run build` und die komplette Playwright-Suite (10 Tests) sind nach jedem
 der vier Schritte grün gewesen, kein Commit war rot.
 
+## 2026-09-09 – Tauzieh-Umbau: klares, deterministisches Gewinnsystem statt Rundenzähler
+
+Nutzer-Feedback: das Spielkonzept war zu unübersichtlich ("man weiß nicht, wann man gewinnt"),
+zu wenig ansprechend, und der bisherige Best-of-N-Rundenzähler fühlte sich beliebig an statt
+nach einem "richtigen Gewinnsystem". Auftrag: ein Tauzieh-System mit sichtbarer Skala, wer
+besser/lauter bellt zieht das Seil zu sich, sofort erkennbarer Sieg, nie zufällig entschieden.
+Scoping-Rückfrage gestellt (welche Modi betrifft das - Tauzieh ist naturgemäß ein 2-Seiten-
+System): Nutzer wählte "Kläffkarussell + Duell + Kläffduell-Matchups", Rudel bleibt Ranking
+(3+ Spieler), bekommt aber ein ähnlich klares Fortschrittselement.
+
+1. **Kernmechanik** (`packages/protocol/src/tug-of-war.ts`, neu): Seilposition -100..+100,
+   jeder Bark zieht um `score.total - 50` zur eigenen Seite, sofortiger Sieg bei Erreichen der
+   Schwelle. Deterministischer Sudden-Death-Fallback ab Runde 14 bei echtem Patt (nie ein
+   Zufallsentscheid) - dieselbe reine Funktion läuft server-autoritativ UND client-seitig für
+   die Live-Animation, kein zweiter Wahrheitsanker. 7 Unit-Tests.
+2. **Schema + Server**: `MATCH_STARTED` trägt jetzt `style: "tugofwar" | "sequence"`.
+   `server/game-server.ts` erzeugt für Kläffkarussell/Duell/Kläffduell-Matchup bewusst lange
+   Rundenreihenfolgen (`TUG_OF_WAR_MAX_CYCLES` = 40 Zyklen) und beendet das Match nicht mehr,
+   wenn die Liste ausgeht, sondern sobald `isTugOfWarFinished` greift - Rudel bleibt bei fester
+   Rundenzahl. `computeDuelStandings` (Best-of-N-Zyklenzählung) ersatzlos entfernt.
+3. **UI**: `TugOfWarBar` (neu) - Seil-Skala mit Gradient, Sieg-Zonen an beiden Enden, Puls-
+   Animation nahe der Schwelle ("Gleich gewonnen!"/"Gleich verloren!"), live aus den
+   empfangenen `ROUND_RESULT`s über dieselbe geteilte Funktion berechnet. `RudelProgress`
+   (neu) - kompakte, live sortierte Rangliste als Rudel-Äquivalent. `ResultScreen` zeigt bei
+   entschiedenen Tauzieh-Matches jetzt ein sofortiges SIEG!/NIEDERLAGE-Banner statt des
+   generischen Podiums. Per echtem Playwright-Chromium-Lauf (zwei Browser, unterschiedlich
+   laute Fake-Audio-Dateien) visuell verifiziert, nicht nur typecheck-verifiziert: neutraler
+   Start, Live-Bewegung des Knotens, Nah-Sieg-Puls (aus Sicht beider Spieler, korrekt
+   gespiegelt), finales SIEG!/NIEDERLAGE-Banner.
+4. **Tests**: `server/game-server.test.ts` auf dynamische Rundenzahl umgestellt (fester
+   `totalRounds`-Wert durch `style`-Check ersetzt, `playFullMatch` mit fester Rundenzahl durch
+   `playTugOfWarMatch`/`playTugOfWarUntilResult` ersetzt, die bis zum tatsächlichen
+   `MATCH_RESULT` spielen statt eine geratene Rundenzahl anzunehmen - mit bewusst stark
+   unterschiedlichen Scores für schnelle, deterministische Konvergenz). Dieselbe Umstellung in
+   `e2e/carousel-rematch.spec.ts` und `e2e/two-player-match.spec.ts` (dort identische
+   Fake-Audio-Datei für beide Spieler, das Match wird also über den Sudden-Death-Fallback
+   entschieden - Timeouts entsprechend großzügig gesetzt).
+5. **Aufräumen**: das `wins`-Feld auf `Standing` (frühere Rundensieg-Zählung fürs
+   Best-of-N-Duell) war nach dem Umbau in der gesamten Codebase permanent `null` - komplett
+   entfernt statt als totes Feld im Wire-Protokoll zu belassen (Schema, Typen, alle
+   Standings-Konstruktoren, Server).
+
+`npm run verify` (124 Tests), `npm run build` und die komplette Playwright-Suite (10 Tests,
+inklusive der beiden auf dynamische Tauzieh-Rundenzahl umgestellten Spezifikationen) sind nach
+dem Umbau grün.
+

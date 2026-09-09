@@ -1,15 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import type { AudioFrame } from "@klaeff/scoring";
 import { computeEnvelopeParams } from "@klaeff/bark-synth";
+import { computeTugOfWarState, TUG_OF_WAR_THRESHOLD, type Match } from "@klaeff/protocol";
 import { Avatar } from "../Avatar";
 import { Button } from "../Button";
 import { Card } from "../Card";
 import { ScoreReveal } from "../ScoreReveal";
 import { EmoteBubble } from "../EmoteBubble";
 import { EmoteWheel } from "../EmoteWheel";
+import { TugOfWarBar } from "../TugOfWarBar";
+import { RudelProgress } from "../RudelProgress";
 import { useGameStore } from "../../lib/store/game-store";
 import { getAudioSession } from "../../lib/audio/session";
 import { getBarkSynthVoice } from "../../lib/audio/bark-synth-voice";
@@ -26,6 +29,9 @@ export function MatchScreen(): React.ReactElement {
   const currentRound = useGameStore((s) => s.currentRound);
   const lastRoundResult = useGameStore((s) => s.lastRoundResult);
   const totalRounds = useGameStore((s) => s.totalRounds);
+  const matchStyle = useGameStore((s) => s.matchStyle);
+  const matchPlayerOrder = useGameStore((s) => s.matchPlayerOrder);
+  const matchRoundResults = useGameStore((s) => s.matchRoundResults);
   const levels = useGameStore((s) => s.levels);
   const [barking, setBarking] = useState(false);
   const reducedMotion = useReducedMotion();
@@ -42,6 +48,45 @@ export function MatchScreen(): React.ReactElement {
   const barkerLevel = barker ? (levels[barker.id] ?? 0) : 0;
   const isSynthMode = lobby?.audioMode === "synth";
   const isCarousel = lobby?.mode === "carousel";
+
+  // Tauzieh (Kläffkarussell/Duell/Kläffduell-Matchup): dieselbe geteilte
+  // Funktion wie serverseitig, live aus den bisher empfangenen ROUND_RESULTs
+  // berechnet - keine eigene Client-Logik, keine Abweichung vom autoritativen
+  // Server-Ergebnis.
+  const tugOfWarState = useMemo(() => {
+    if (matchStyle !== "tugofwar" || matchPlayerOrder.length < 2) return null;
+    const fakeMatch: Match = {
+      id: "client-preview",
+      lobbyId: "",
+      playerOrder: matchPlayerOrder,
+      currentRoundIndex: 0,
+      results: matchRoundResults,
+      phase: "in-progress",
+      startedAt: 0,
+      finishedAt: null,
+    };
+    return computeTugOfWarState(fakeMatch);
+  }, [matchStyle, matchPlayerOrder, matchRoundResults]);
+
+  const myTugFraction =
+    tugOfWarState && playerId
+      ? (playerId === tugOfWarState.playerA ? tugOfWarState.ropePosition : -tugOfWarState.ropePosition) /
+        TUG_OF_WAR_THRESHOLD
+      : 0;
+  const tugOpponent = tugOfWarState
+    ? players.find((p) => p.id === (playerId === tugOfWarState.playerA ? tugOfWarState.playerB : tugOfWarState.playerA))
+    : null;
+  const me = players.find((p) => p.id === playerId) ?? null;
+
+  const rudelEntries = useMemo(() => {
+    if (matchStyle !== "sequence" || players.length < 3) return null;
+    const totals = new Map<string, number>();
+    for (const result of matchRoundResults) {
+      totals.set(result.playerId, (totals.get(result.playerId) ?? 0) + result.score.total);
+    }
+    return players.map((p) => ({ playerId: p.id, nickname: p.nickname, avatar: p.avatar, total: totals.get(p.id) ?? 0 }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchStyle, matchRoundResults, lobby?.players]);
 
   useEffect(() => {
     setBarking(false);
@@ -134,9 +179,23 @@ export function MatchScreen(): React.ReactElement {
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-lg flex-col items-center gap-6 px-5 py-8">
-      <p className="text-xs uppercase tracking-wide text-[var(--muted)]">
-        Runde {(currentRound?.roundIndex ?? 0) + 1} / {totalRounds ?? players.length}
-      </p>
+      {tugOfWarState ? (
+        me &&
+        tugOpponent && (
+          <TugOfWarBar
+            fraction={myTugFraction}
+            meNickname={me.nickname}
+            meAvatar={me.avatar}
+            opponentNickname={tugOpponent.nickname}
+            opponentAvatar={tugOpponent.avatar}
+          />
+        )
+      ) : (
+        <p className="text-xs uppercase tracking-wide text-[var(--muted)]">
+          Runde {(currentRound?.roundIndex ?? 0) + 1} / {totalRounds ?? players.length}
+        </p>
+      )}
+      {rudelEntries && <RudelProgress entries={rudelEntries} myPlayerId={playerId} />}
 
       {isCarousel && (
         <p className="rounded-full border-2 border-[var(--ink)] bg-[var(--violet)]/15 px-3 py-1 text-center text-[10px]">

@@ -5,7 +5,6 @@ import {
   buildDuelPlayerOrder,
   buildRudelPlayerOrder,
   computeAggregateStandings,
-  computeDuelStandings,
   computeStandings,
   createMatch,
   createMatchWithOrder,
@@ -128,55 +127,15 @@ describe("match", () => {
     expect(standings.map((s) => s.rank)).toEqual([1, 2, 3]);
   });
 
-  describe("Duell (Best-of-N)", () => {
+  describe("Duell/Tauzieh-Hilfsfunktion", () => {
     it("buildDuelPlayerOrder wechselt sich fuer jeden Zyklus ab", () => {
       expect(buildDuelPlayerOrder("a", "b", 5)).toEqual(["a", "b", "a", "b", "a", "b", "a", "b", "a", "b"]);
     });
 
-    it("zaehlt Rundensiege pro Zyklus und rankt danach, nicht nach Score-Summe", () => {
-      const { lobby, players } = setupLobby(2);
-      const order = buildDuelPlayerOrder(players[0]!.id, players[1]!.id, 3);
-      let match = createMatchWithOrder(lobby.id, order, 0);
-
-      // Zyklus 1: p0 gewinnt knapp.
-      match = submitRoundResult(match, { playerId: players[0]!.id, roundIndex: 0, score: makeScore(60), calibration: CAL }, 1);
-      match = submitRoundResult(match, { playerId: players[1]!.id, roundIndex: 1, score: makeScore(50), calibration: CAL }, 1);
-      // Zyklus 2: p1 gewinnt haushoch.
-      match = submitRoundResult(match, { playerId: players[0]!.id, roundIndex: 2, score: makeScore(10), calibration: CAL }, 2);
-      match = submitRoundResult(match, { playerId: players[1]!.id, roundIndex: 3, score: makeScore(95), calibration: CAL }, 2);
-      // Zyklus 3: p0 gewinnt knapp.
-      match = submitRoundResult(match, { playerId: players[0]!.id, roundIndex: 4, score: makeScore(60), calibration: CAL }, 3);
-      match = submitRoundResult(match, { playerId: players[1]!.id, roundIndex: 5, score: makeScore(50), calibration: CAL }, 3);
-
-      expect(isMatchFinished(match)).toBe(true);
-      const standings = computeDuelStandings(match);
-      // p0 hat 2 Rundensiege, p1 nur 1 - trotz p1s hoher Einzelrunde gewinnt p0 das Duell.
-      expect(standings[0]?.playerId).toBe(players[0]!.id);
-      expect(standings[0]?.wins).toBe(2);
-      expect(standings[1]?.playerId).toBe(players[1]!.id);
-      expect(standings[1]?.wins).toBe(1);
-    });
-
-    it("spielt immer alle Zyklen durch (kein vorzeitiges Ende), siehe BLOCKERS.md", () => {
-      const { lobby, players } = setupLobby(2);
-      const order = buildDuelPlayerOrder(players[0]!.id, players[1]!.id, 5);
-      let match = createMatchWithOrder(lobby.id, order, 0);
-      for (let cycle = 0; cycle < 3; cycle += 1) {
-        match = submitRoundResult(
-          match,
-          { playerId: players[0]!.id, roundIndex: match.currentRoundIndex, score: makeScore(90), calibration: CAL },
-          1,
-        );
-        match = submitRoundResult(
-          match,
-          { playerId: players[1]!.id, roundIndex: match.currentRoundIndex, score: makeScore(10), calibration: CAL },
-          1,
-        );
-      }
-      // p0 fuehrt schon 3:0 - trotzdem noch nicht fertig, es fehlen 2 weitere Zyklen.
-      expect(isMatchFinished(match)).toBe(false);
-      expect(match.currentRoundIndex).toBe(6);
-    });
+    // Die eigentliche Sieg-/Abbruchlogik (Seil-Schwelle statt fester
+    // Zyklenzahl) ist jetzt in tug-of-war.ts/tug-of-war.test.ts getestet -
+    // computeDuelStandings/computeDuelStandings-Fixzyklen-Logik gibt es
+    // nicht mehr, siehe BLOCKERS.md (Tauzieh-Umbau).
   });
 
   describe("Rudel (Ranking ueber mehrere Zyklen)", () => {

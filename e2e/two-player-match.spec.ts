@@ -1,10 +1,14 @@
 import { test, expect } from "@playwright/test";
-import { createPrivateLobby, joinPrivateLobby } from "./helpers";
+import { createPrivateLobby, joinPrivateLobby, playTugOfWarUntilResult } from "./helpers";
 
 test.describe("Private Lobby: 2-Spieler-Duell mit echtem Ton", () => {
-  test("zwei Spieler joinen per Code, spielen ein komplettes Best-of-5-Duell mit echtem Ton und sehen das Ergebnis", async ({
+  test("zwei Spieler joinen per Code, spielen ein komplettes Tauzieh-Duell mit echtem Ton und sehen das Ergebnis", async ({
     browser,
-  }) => {
+  }, testInfo) => {
+    // Alle E2E-Kontexte teilen dieselbe Fake-Audio-Datei -> das Tauzieh-Match
+    // wird ueber den Sudden-Death-Fallback entschieden (bis zu 15 Runden,
+    // siehe playTugOfWarUntilResult) - grosszuegiger Timeout dafuer.
+    testInfo.setTimeout(150_000);
     const hostContext = await browser.newContext();
     const guestContext = await browser.newContext();
     const host = await hostContext.newPage();
@@ -24,22 +28,13 @@ test.describe("Private Lobby: 2-Spieler-Duell mit echtem Ton", () => {
 
     await host.getByRole("button", { name: "Match starten" }).click();
 
-    // Bei genau 2 Spielern startet automatisch der Duell-Modus: Best-of-5 =
-    // 5 Zyklen a 2 Spieler = 10 einzelne Bell-Runden. Rundenreihenfolge =
-    // Beitrittsreihenfolge (siehe packages/protocol/src/match.ts), also
-    // abwechselnd Host, Gast, Host, Gast, ... Explizit statt per isVisible()-
-    // Race erkannt, siehe BLOCKERS.md.
-    for (let round = 0; round < 10; round += 1) {
-      const barkerPage = round % 2 === 0 ? host : guest;
-      const bellButton = barkerPage.getByRole("button", { name: /BELL!/u });
-      await bellButton.waitFor({ state: "visible", timeout: 15000 });
-      await bellButton.click();
-      // Bellfenster dauert 3s, danach kommt das Rundenergebnis.
-      await host.waitForTimeout(3500);
-    }
+    // Bei genau 2 Spielern startet automatisch der Duell-Modus: Tauzieh mit
+    // dynamischer Rundenzahl (Seil-Schwelle statt fester Zyklenzahl, siehe
+    // packages/protocol/src/tug-of-war.ts) statt eines festen Best-of-N.
+    await playTugOfWarUntilResult([host, guest]);
 
-    await expect(host.getByText("Ergebnis")).toBeVisible({ timeout: 10000 });
-    await expect(guest.getByText("Ergebnis")).toBeVisible({ timeout: 10000 });
+    await expect(host.getByText(/SIEG!|NIEDERLAGE/u)).toBeVisible({ timeout: 10000 });
+    await expect(guest.getByText(/SIEG!|NIEDERLAGE/u)).toBeVisible({ timeout: 10000 });
 
     await host.screenshot({ path: "artifacts/e2e/two-player-result.png" });
 

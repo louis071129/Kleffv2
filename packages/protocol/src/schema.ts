@@ -52,8 +52,6 @@ export const StandingSchema = z.object({
   rank: z.number(),
   /** Repraesentatives Einzelergebnis (Karussell: die eine Runde, Duell/Rudel: eine Beispielrunde fuer die Breakdown-Anzeige). */
   score: BarkScoreSchema.nullable(),
-  /** Rundensiege bei Duell/Kläffduell (Best-of-N), sonst null. */
-  wins: z.number().int().nullable(),
   /** Summe der Einzel-Scores bei Rudel, sonst null. */
   aggregateTotal: z.number().nullable(),
 });
@@ -162,6 +160,10 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
     matchId: z.string(),
     playerOrder: z.array(z.string()),
     totalRounds: z.number().int(),
+    // "tugofwar": Kläffkarussell/Duell/Kläffduell-Matchup - dynamische Laenge,
+    // entschieden per Seil-Schwelle (siehe packages/protocol/src/tug-of-war.ts).
+    // "sequence": Rudel - feste Rundenzahl, Ranking nach Score-Summe.
+    style: z.enum(["tugofwar", "sequence"]),
   }),
   z.object({ type: z.literal("ROUND_STARTED"), roundIndex: z.number(), barkerPlayerId: z.string(), windowMs: z.number() }),
   z.object({ type: z.literal("LEVEL_BROADCAST"), playerId: z.string(), level: z.number() }),

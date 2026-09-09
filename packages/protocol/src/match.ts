@@ -15,9 +15,9 @@ function nextId(prefix: string, rand: () => number): string {
 
 /**
  * Erzeugt ein Match mit einer explizit vorgegebenen Rundenreihenfolge -
- * Grundlage fuer Duell (Spieler wiederholt sich, Best-of-N) und Rudel
- * (Spieler mehrfach nacheinander). Fuer den einfachen Fall (jeder genau
- * einmal) siehe createMatch.
+ * Grundlage fuer Duell/Kläffkarussell/Kläffduell-Matchup (Tauzieh, siehe
+ * buildDuelPlayerOrder) und Rudel (Spieler mehrfach nacheinander). Fuer den
+ * einfachen Fall (jeder genau einmal) siehe createMatch.
  */
 export function createMatchWithOrder(
   lobbyId: LobbyId,
@@ -54,10 +54,11 @@ export function createMatch(lobby: Lobby, now: number, rand: () => number = Math
 }
 
 /**
- * Rundenreihenfolge fuer ein Duell (2 Spieler, Best-of-N): abwechselnd
- * p1,p2 wiederholt fuer `bestOf` Zyklen. Spielt bewusst immer alle Zyklen
- * durch (kein vorzeitiges Ende bei vorzeitiger Entscheidung) - einfachere,
- * ebenso valide Auslegung von "Best of N", siehe BLOCKERS.md.
+ * Rundenreihenfolge fuer ein Tauzieh (Duell/Kläffkarussell/Kläffduell-
+ * Matchup, 2 Spieler): abwechselnd p1,p2 wiederholt fuer `bestOf` Zyklen -
+ * bewusst absichtlich lang (siehe TUG_OF_WAR_MAX_CYCLES), das eigentliche
+ * Matchende bestimmt nicht das Ausgehen dieser Liste, sondern die
+ * Seil-Schwelle (isTugOfWarFinished, siehe tug-of-war.ts).
  */
 export function buildDuelPlayerOrder(playerA: PlayerId, playerB: PlayerId, bestOf: number): PlayerId[] {
   const order: PlayerId[] = [];
@@ -108,9 +109,10 @@ export function submitRoundResult(match: Match, result: RoundResult, now: number
 
 /**
  * Standings fuer den einfachen Fall: jeder Spieler taucht genau einmal in
- * playerOrder auf (Kläffkarussell-Begegnung, Kläffduell-Einzelmatchup ohne
- * Best-of-Wiederholung). Sortiert nach bestem Score, Spieler ohne Ergebnis
- * (Timeout) landen am Ende.
+ * playerOrder auf. Sortiert nach bestem Score, Spieler ohne Ergebnis
+ * (Timeout) landen am Ende. Kläffkarussell/Duell/Kläffduell-Matchup nutzen
+ * inzwischen computeTugOfWarStandings (siehe tug-of-war.ts) statt dieser
+ * Funktion - hier fuer den generischen "jeder genau einmal"-Fall erhalten.
  */
 export function computeStandings(match: Match): Standing[] {
   const withResults = match.playerOrder
@@ -132,56 +134,6 @@ export function computeStandings(match: Match): Standing[] {
     playerId: entry.playerId,
     rank: index + 1,
     result: entry.result,
-    wins: null,
-    aggregateTotal: null,
-  }));
-}
-
-/**
- * Standings fuer ein Duell (2 Spieler, playerOrder = [p1,p2] wiederholt):
- * jedes p1/p2-Paar in den Ergebnissen ist ein Zyklus, der Zyklus-Sieger
- * (per compareBarkScores) bekommt einen Rundensieg. Rang nach Rundensiegen,
- * bei Gleichstand nach Score-Summe.
- */
-export function computeDuelStandings(match: Match): Standing[] {
-  const wins = new Map<PlayerId, number>();
-  const totals = new Map<PlayerId, number>();
-  const lastResultByPlayer = new Map<PlayerId, RoundResult>();
-
-  for (const result of match.results) {
-    totals.set(result.playerId, (totals.get(result.playerId) ?? 0) + result.score.total);
-    lastResultByPlayer.set(result.playerId, result);
-  }
-
-  for (let i = 0; i + 1 < match.results.length; i += 2) {
-    const a = match.results[i];
-    const b = match.results[i + 1];
-    if (!a || !b) {
-      continue;
-    }
-    const cmp = compareBarkScores(a.score, b.score);
-    if (cmp > 0) {
-      wins.set(a.playerId, (wins.get(a.playerId) ?? 0) + 1);
-    } else if (cmp < 0) {
-      wins.set(b.playerId, (wins.get(b.playerId) ?? 0) + 1);
-    }
-  }
-
-  const playerIds = [...new Set(match.playerOrder)];
-  const ranked = playerIds
-    .map((playerId) => ({
-      playerId,
-      wins: wins.get(playerId) ?? 0,
-      total: totals.get(playerId) ?? 0,
-      result: lastResultByPlayer.get(playerId) ?? null,
-    }))
-    .sort((a, b) => b.wins - a.wins || b.total - a.total);
-
-  return ranked.map((entry, index) => ({
-    playerId: entry.playerId,
-    rank: index + 1,
-    result: entry.result,
-    wins: entry.wins,
     aggregateTotal: null,
   }));
 }
@@ -217,7 +169,6 @@ export function computeAggregateStandings(match: Match): Standing[] {
     playerId: entry.playerId,
     rank: index + 1,
     result: entry.result,
-    wins: null,
     aggregateTotal: entry.total,
   }));
 }

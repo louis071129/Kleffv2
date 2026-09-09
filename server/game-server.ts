@@ -8,8 +8,8 @@ import {
   buildDuelPlayerOrder,
   buildRudelPlayerOrder,
   computeAggregateStandings,
-  computeDuelStandings,
-  computeStandings,
+  computeTugOfWarStandings,
+  computeTugOfWarState,
   createBracket,
   createCarouselState,
   createMatchWithOrder,
@@ -22,6 +22,7 @@ import {
   isDeviceExcludedFromPublicQueue,
   isMatchFinished,
   isQueued,
+  isTugOfWarFinished,
   kickPlayer,
   LobbyError,
   MatchError,
@@ -54,14 +55,22 @@ import type {
   Standing,
 } from "@klaeff/protocol";
 
-/** Best-of-5 fuer den reinen 2-Spieler-Duell-Modus in privaten Lobbys, siehe Auftrag. */
-const DUEL_BEST_OF = 5;
 /** Rudel: alle Spieler nacheinander, das Ganze fuer 3 Zyklen ("Ranking ueber 3 Runden"), siehe Auftrag. */
 const RUDEL_CYCLES = 3;
-/** Best-of-3 pro Kläffduell-Matchup im K.-o.-Bracket, siehe Auftrag. */
-const BRACKET_BEST_OF = 3;
+/**
+ * Kläffkarussell/Duell/Kläffduell-Matchup sind jetzt Tauzieh-Matches: die
+ * Rundenreihenfolge muss nur lang genug sein, dass sie in der Praxis nie
+ * ausgeht (echte Beendigung entscheidet isTugOfWarFinished per Seil-Schwelle
+ * oder Sudden-Death, siehe packages/protocol/src/tug-of-war.ts) - 40 Zyklen
+ * = 80 Runden ist weit mehr als der Sudden-Death-Punkt je erreichen sollte.
+ */
+const TUG_OF_WAR_MAX_CYCLES = 40;
 
 type MatchKind = "carousel" | "duell" | "rudel" | "bracket";
+
+function matchStyleForKind(kind: MatchKind): "tugofwar" | "sequence" {
+  return kind === "rudel" ? "sequence" : "tugofwar";
+}
 
 export interface GameServerOptions {
   readonly roundTimeoutMs?: number;
@@ -499,7 +508,10 @@ export class GameServer {
         this.lobbyIdByPlayerId.set(player.id, lobby.id);
       }
       this.broadcastToLobby(lobby.id, { type: "LOBBY_STATE", lobby: toSnapshot(lobby) });
-      this.beginMatch(lobby.id, lobby.players.map((p) => p.id), "carousel", now);
+      const [a, b] = lobby.players.map((p) => p.id);
+      if (a && b) {
+        this.beginMatch(lobby.id, buildDuelPlayerOrder(a, b, TUG_OF_WAR_MAX_CYCLES), "carousel", now);
+      }
     }
   }
 
@@ -694,13 +706,16 @@ export class GameServer {
     }
     const playerIds = lobby.players.map((p) => p.id);
     if (lobby.mode === "carousel") {
-      this.beginMatch(lobby.id, playerIds, "carousel", now);
+      const [a, b] = playerIds;
+      if (a && b) {
+        this.beginMatch(lobby.id, buildDuelPlayerOrder(a, b, TUG_OF_WAR_MAX_CYCLES), "carousel", now);
+      }
       return;
     }
     if (lobby.matchMode === "duell") {
       const [a, b] = playerIds;
       if (a && b) {
-        this.beginMatch(lobby.id, buildDuelPlayerOrder(a, b, DUEL_BEST_OF), "duell", now);
+        this.beginMatch(lobby.id, buildDuelPlayerOrder(a, b, TUG_OF_WAR_MAX_CYCLES), "duell", now);
       }
       return;
     }
@@ -719,6 +734,7 @@ export class GameServer {
       matchId: match.id,
       playerOrder: [...match.playerOrder],
       totalRounds: match.playerOrder.length,
+      style: matchStyleForKind(kind),
     });
     this.startRound(match, lobbyId);
   }
@@ -753,7 +769,12 @@ export class GameServer {
       return;
     }
     this.currentMatchupByLobbyId.set(lobbyId, nextMatchup.id);
-    this.beginMatch(lobbyId, buildDuelPlayerOrder(nextMatchup.playerA, nextMatchup.playerB, BRACKET_BEST_OF), "bracket", now);
+    this.beginMatch(
+      lobbyId,
+      buildDuelPlayerOrder(nextMatchup.playerA, nextMatchup.playerB, TUG_OF_WAR_MAX_CYCLES),
+      "bracket",
+      now,
+    );
   }
 
   private handleBracketMatchupFinished(lobbyId: LobbyId, match: Match, now: number): void {
@@ -762,7 +783,7 @@ export class GameServer {
     if (!matchupId || !bracket) {
       return;
     }
-    const winnerId = computeDuelStandings(match)[0]?.playerId;
+    const winnerId = computeTugOfWarState(match).winnerId;
     if (!winnerId) {
       return;
     }
@@ -781,7 +802,7 @@ export class GameServer {
     const standings = computeBracketPlacements(bracket, lobby.players.map((p) => p.id));
     this.broadcastToLobby(lobbyId, {
       type: "MATCH_RESULT",
-      standings: standings.map((s) => ({ playerId: s.playerId, rank: s.rank, score: null, wins: null, aggregateTotal: null })),
+      standings: standings.map((s) => ({ playerId: s.playerId, rank: s.rank, score: null, aggregateTotal: null })),
     });
     this.lobbies.set(lobbyId, { ...lobby, phase: "finished", updatedAt: now });
   }
@@ -875,12 +896,17 @@ export class GameServer {
       this.broadcastToLobby(lobbyId, { type: "FLAG_BROADCAST", playerId, flags: [...score.flags] });
     }
 
-    if (!isMatchFinished(updatedMatch)) {
+    const kind = this.matchKindByMatchId.get(updatedMatch.id) ?? "carousel";
+    // Kläffkarussell/Duell/Kläffduell-Matchup sind Tauzieh-Matches: sie enden,
+    // sobald das Seil die Schwelle erreicht (oder der Sudden-Death-Fallback
+    // greift), nicht erst wenn die (absichtlich sehr lange) Rundenreihenfolge
+    // ausgeht. Rudel bleibt bei fester Rundenzahl (isMatchFinished).
+    const finished = kind === "rudel" ? isMatchFinished(updatedMatch) : isTugOfWarFinished(updatedMatch);
+    if (!finished) {
       this.startRound(updatedMatch, lobbyId);
       return;
     }
 
-    const kind = this.matchKindByMatchId.get(updatedMatch.id) ?? "carousel";
     this.matchKindByMatchId.delete(updatedMatch.id);
     this.roundTimers.delete(updatedMatch.id);
 
@@ -1027,13 +1053,12 @@ function markConnection(lobby: Lobby, playerId: PlayerId, connected: boolean, no
 
 function computeStandingsForKind(kind: MatchKind, match: Match): Standing[] {
   switch (kind) {
-    case "duell":
-      return computeDuelStandings(match);
     case "rudel":
       return computeAggregateStandings(match);
+    case "duell":
     case "carousel":
     default:
-      return computeStandings(match);
+      return computeTugOfWarStandings(match);
   }
 }
 
@@ -1104,7 +1129,6 @@ function toWireStanding(standing: Standing) {
     playerId: standing.playerId,
     rank: standing.rank,
     score: standing.result ? toWireScore(standing.result.score) : null,
-    wins: standing.wins,
     aggregateTotal: standing.aggregateTotal,
   };
 }

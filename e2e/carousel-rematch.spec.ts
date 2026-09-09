@@ -1,11 +1,15 @@
 import { test, expect } from "@playwright/test";
-import { joinCarousel } from "./helpers";
+import { joinCarousel, playTugOfWarUntilResult } from "./helpers";
 
 test.describe("Kläffkarussell", () => {
-  test("zwei Spieler werden sofort gepaart, spielen eine Begegnung und werden per Re-Pairing erneut gematcht", async ({
+  test("zwei Spieler werden sofort gepaart, spielen ein Tauzieh-Match und werden per Re-Pairing erneut gematcht", async ({
     browser,
   }, testInfo) => {
-    testInfo.setTimeout(90_000);
+    // Alle E2E-Kontexte teilen dieselbe Fake-Audio-Datei -> das Tauzieh-Match
+    // wird ueber den Sudden-Death-Fallback entschieden (bis zu 15 Runden,
+    // siehe playTugOfWarUntilResult), zweimal hintereinander (Erstbegegnung +
+    // Re-Pairing) - grosszuegiger Timeout dafuer.
+    testInfo.setTimeout(240_000);
     const contextA = await browser.newContext();
     const contextB = await browser.newContext();
     const a = await contextA.newPage();
@@ -16,27 +20,21 @@ test.describe("Kläffkarussell", () => {
 
     // Sofort gepaart, kein Countdown - der Match-Start folgt der Paarung so
     // unmittelbar, dass der Lobby-Screen oft nur einen Frame lang sichtbar
-    // ist (nicht zuverlaessig testbar) - stattdessen direkt auf die erste
-    // Runde warten, das belegt Pairing + Matchstart gemeinsam.
-    await expect(a.getByText(/Runde 1/u)).toBeVisible({ timeout: 15000 });
-    await expect(b.getByText(/Runde 1/u)).toBeVisible({ timeout: 15000 });
+    // ist (nicht zuverlaessig testbar) - stattdessen direkt auf die
+    // Tauzieh-Skala warten, das belegt Pairing + Matchstart gemeinsam.
+    await expect(a.getByText(/\(Du\)/u)).toBeVisible({ timeout: 15000 });
+    await expect(b.getByText(/\(Du\)/u)).toBeVisible({ timeout: 15000 });
 
     // Hinweistext: nie die echte Stimme, siehe Auftrag.
     await expect(a.getByText(/niemand hört deine echte Stimme/u)).toBeVisible({ timeout: 10000 });
 
-    // Begegnung = 2 Runden (jeder bellt einmal). Rundenreihenfolge =
-    // Warteschlangen-Reihenfolge (siehe packages/protocol/src/carousel.ts):
-    // A hat sich zuerst eingereiht, ist also zuerst dran. Explizit statt per
-    // isVisible()-Race erkannt - siehe BLOCKERS.md fuer die Lehre daraus.
-    for (const barkerPage of [a, b]) {
-      const bellButton = barkerPage.getByRole("button", { name: /BELL!/u });
-      await bellButton.waitFor({ state: "visible", timeout: 15000 });
-      await bellButton.click();
-      await a.waitForTimeout(3500);
-    }
+    // Begegnung = Tauzieh-Match, dynamische Rundenzahl (Seil-Schwelle statt
+    // fester Zyklenzahl, siehe packages/protocol/src/tug-of-war.ts) - nie
+    // zufaellig entschieden.
+    await playTugOfWarUntilResult([a, b]);
 
-    await expect(a.getByText("Ergebnis")).toBeVisible({ timeout: 10000 });
-    await expect(b.getByText("Ergebnis")).toBeVisible({ timeout: 10000 });
+    await expect(a.getByText(/SIEG!|NIEDERLAGE/u)).toBeVisible({ timeout: 10000 });
+    await expect(b.getByText(/SIEG!|NIEDERLAGE/u)).toBeVisible({ timeout: 10000 });
 
     // Re-Pairing: beide suchen sich einen "Nächsten Gegner" - da nur diese
     // zwei im Karussell warten, werden sie erneut miteinander gepaart. Das
@@ -48,8 +46,8 @@ test.describe("Kläffkarussell", () => {
     await a.getByRole("button", { name: "Nächster Gegner" }).click();
     await b.getByRole("button", { name: "Nächster Gegner" }).click();
 
-    await expect(a.getByText(/Runde 1/u)).toBeVisible({ timeout: 15000 });
-    await expect(b.getByText(/Runde 1/u)).toBeVisible({ timeout: 15000 });
+    await expect(a.getByText(/\(Du\)/u)).toBeVisible({ timeout: 15000 });
+    await expect(b.getByText(/\(Du\)/u)).toBeVisible({ timeout: 15000 });
 
     await a.screenshot({ path: "artifacts/e2e/carousel-rematch.png" });
 

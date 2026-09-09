@@ -57,3 +57,35 @@ export async function joinPrivateLobby(page: Page, code: string): Promise<void> 
   await page.getByRole("button", { name: "Los" }).click();
   await completeMicAndCalibration(page);
 }
+
+/**
+ * Spielt ein Tauzieh-Match (Kläffkarussell/Duell/Kläffduell-Matchup) durch,
+ * bis auf einer der Seiten SIEG!/NIEDERLAGE erscheint - die Rundenzahl ist
+ * dynamisch (Seil-Schwelle statt fester Zyklenzahl, siehe
+ * packages/protocol/src/tug-of-war.ts), daher kein fester Loop mehr. Alle
+ * E2E-Kontexte teilen sich dieselbe Fake-Audio-Datei (siehe
+ * playwright.config.ts), Scores sind also praktisch identisch - das Match
+ * wird ueber den deterministischen Sudden-Death-Fallback (nie zufaellig)
+ * entschieden, das braucht bis zu 15 Runden.
+ */
+export async function playTugOfWarUntilResult(pages: readonly Page[], maxRounds = 20): Promise<void> {
+  for (let round = 0; round < maxRounds; round += 1) {
+    const resultVisible = await pages[0]!
+      .getByText(/SIEG!|NIEDERLAGE/u)
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (resultVisible) return;
+
+    for (const page of pages) {
+      const bellButton = page.getByRole("button", { name: /BELL!/u });
+      if (await bellButton.isVisible().catch(() => false)) {
+        await bellButton.click();
+        // Bellfenster dauert 3s, danach kommt das Rundenergebnis.
+        await page.waitForTimeout(3500);
+        break;
+      }
+    }
+  }
+  throw new Error("Tauzieh-Match nicht innerhalb der Sicherheitsgrenze entschieden (E2E)");
+}

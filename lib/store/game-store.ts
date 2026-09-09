@@ -1,13 +1,30 @@
 "use client";
 
 import { create } from "zustand";
-import type { AntiCheatFlag, BarkScore } from "@klaeff/scoring";
-import type { AvatarSeed, ServerMessage } from "@klaeff/protocol";
+import type { AntiCheatFlag, BarkScore, CalibrationProfile } from "@klaeff/scoring";
+import type { AvatarSeed, RoundResult, ServerMessage } from "@klaeff/protocol";
 import { getKlaeffClient, type ConnectionStatus } from "../ws-client";
 import { DEFAULT_AVATAR, getOrCreateDeviceUuid, loadAvatar, loadNickname, saveAvatar, saveNickname } from "../storage";
 
 type LobbySnapshot = Extract<ServerMessage, { type: "LOBBY_STATE" }>["lobby"];
 type MatchStandings = Extract<ServerMessage, { type: "MATCH_RESULT" }>["standings"];
+type MatchStyle = Extract<ServerMessage, { type: "MATCH_STARTED" }>["style"];
+
+/**
+ * ROUND_RESULT traegt keine Kalibrierung ueber die Leitung (die ist server-
+ * intern fuer den naechsten Score-Vergleich relevant, nicht fuer die Anzeige).
+ * computeTugOfWarState() braucht sie nicht (nur score.total) - dieser
+ * Platzhalter erfuellt nur den RoundResult-Typ fuer die client-seitige
+ * Wiederverwendung der geteilten Tauzieh-Funktion.
+ */
+const UNUSED_CALIBRATION: CalibrationProfile = {
+  noiseFloorDbfs: 0,
+  refVoiceDbfs: 0,
+  maxObservedDbfs: 0,
+  headroomDb: 0,
+  agcActive: false,
+  calibratedAt: 0,
+};
 
 export type Screen = "home" | "calibration" | "queue" | "lobby" | "match" | "result";
 
@@ -28,6 +45,11 @@ interface GameStoreState {
   lobby: LobbySnapshot | null;
   matchId: string | null;
   totalRounds: number | null;
+  /** "tugofwar" (Kläffkarussell/Duell/Kläffduell-Matchup) oder "sequence" (Rudel). */
+  matchStyle: MatchStyle | null;
+  matchPlayerOrder: readonly string[];
+  /** Alle bisherigen Rundenergebnisse dieses Matches - fuer die live berechnete Seilposition/Rudel-Rangliste. */
+  matchRoundResults: readonly RoundResult[];
   currentRound: { roundIndex: number; barkerPlayerId: string; windowMs: number } | null;
   lastRoundResult: { roundIndex: number; playerId: string; score: BarkScore } | null;
   matchStandings: MatchStandings | null;
@@ -71,7 +93,15 @@ export const useGameStore = create<GameStoreState>((set, get) => {
     client.on("COUNTDOWN_UPDATE", (msg) => set({ countdownSeconds: msg.secondsRemaining }));
 
     client.on("MATCH_STARTED", (msg) =>
-      set({ matchId: msg.matchId, totalRounds: msg.totalRounds, screen: "match", matchStandings: null }),
+      set({
+        matchId: msg.matchId,
+        totalRounds: msg.totalRounds,
+        matchStyle: msg.style,
+        matchPlayerOrder: msg.playerOrder,
+        matchRoundResults: [],
+        screen: "match",
+        matchStandings: null,
+      }),
     );
 
     client.on("ROUND_STARTED", (msg) =>
@@ -81,7 +111,13 @@ export const useGameStore = create<GameStoreState>((set, get) => {
     );
 
     client.on("ROUND_RESULT", (msg) =>
-      set({ lastRoundResult: { roundIndex: msg.roundIndex, playerId: msg.playerId, score: msg.score } }),
+      set((state) => ({
+        lastRoundResult: { roundIndex: msg.roundIndex, playerId: msg.playerId, score: msg.score },
+        matchRoundResults: [
+          ...state.matchRoundResults,
+          { playerId: msg.playerId, roundIndex: msg.roundIndex, score: msg.score, calibration: UNUSED_CALIBRATION },
+        ],
+      })),
     );
 
     client.on("MATCH_RESULT", (msg) => set({ matchStandings: msg.standings, screen: "result", currentRound: null }));
@@ -121,6 +157,9 @@ export const useGameStore = create<GameStoreState>((set, get) => {
     lobby: null,
     matchId: null,
     totalRounds: null,
+    matchStyle: null,
+    matchPlayerOrder: [],
+    matchRoundResults: [],
     currentRound: null,
     lastRoundResult: null,
     matchStandings: null,
@@ -145,7 +184,17 @@ export const useGameStore = create<GameStoreState>((set, get) => {
       getKlaeffClient().connect(deviceUuid, nickname || "Spieler", avatar);
     },
     goHome: () =>
-      set({ screen: "home", lobby: null, matchId: null, totalRounds: null, currentRound: null, matchStandings: null }),
+      set({
+        screen: "home",
+        lobby: null,
+        matchId: null,
+        totalRounds: null,
+        matchStyle: null,
+        matchPlayerOrder: [],
+        matchRoundResults: [],
+        currentRound: null,
+        matchStandings: null,
+      }),
     setScreen: (screen) => set({ screen }),
     hydrate: () => {
       set({

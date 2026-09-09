@@ -190,6 +190,35 @@ async function playFullMatch(
   }
 }
 
+/**
+ * Spielt ein Tauzieh-Match (Kläffkarussell/Duell/Kläffduell-Matchup) bis zum
+ * MATCH_RESULT durch - die Rundenzahl ist dynamisch (Seil-Schwelle statt
+ * fester Zyklenzahl), daher wird hier ueber ROUND_STARTED/MATCH_RESULT
+ * geloopt statt eine feste Anzahl Runden anzunehmen. `peakForPlayer` steuert
+ * pro Spieler deterministisch, wie laut gebellt wird - mit klar
+ * unterschiedlichen Werten (siehe Score-Formel in packages/scoring) loest
+ * sich die Seil-Schwelle in wenigen Runden auf statt in ein 0:0 oder den
+ * Sudden-Death-Fallback zu laufen.
+ */
+async function playTugOfWarMatch(
+  listener: TestClient,
+  players: { client: TestClient; playerId: string }[],
+  peakForPlayer: (playerId: string) => number,
+  maxRounds = 30,
+): Promise<Extract<ServerMessage, { type: "MATCH_RESULT" }>> {
+  for (let i = 0; i < maxRounds; i += 1) {
+    const next = await listener.waitForEither("ROUND_STARTED", "MATCH_RESULT", 3000);
+    if (next.type === "MATCH_RESULT") {
+      return next;
+    }
+    const barker = players.find((p) => p.playerId === next.barkerPlayerId);
+    expect(barker).toBeDefined();
+    barker!.client.send({ type: "BARK_SUBMIT", frames: makeFrames(peakForPlayer(next.barkerPlayerId)) });
+    await listener.waitFor("ROUND_RESULT", 3000);
+  }
+  throw new Error("Tauzieh-Match nicht innerhalb der Sicherheitsgrenze entschieden");
+}
+
 describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", () => {
   it("zwei wartende Spieler werden sofort gepaart und spielen eine komplette Begegnung (nie Rohaudio)", async () => {
     const harness = await createHarness();
@@ -208,12 +237,13 @@ describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", 
     expect(lobbyState.lobby.players).toHaveLength(2);
 
     const started = await a.client.waitFor("MATCH_STARTED", 2000);
-    expect(started.totalRounds).toBe(2);
+    expect(started.style).toBe("tugofwar");
 
-    await playFullMatch([a, b], 2);
-    const result = await a.client.waitFor("MATCH_RESULT", 2000);
+    // A bellt laut, B leise -> Seil zieht deterministisch zu A, kein Zufall.
+    const result = await playTugOfWarMatch(a.client, [a, b], (playerId) => (playerId === a.playerId ? -5 : -45));
     expect(result.standings).toHaveLength(2);
     expect(result.standings[0]?.rank).toBe(1);
+    expect(result.standings[0]?.playerId).toBe(a.playerId);
   }, 15000);
 
   it("bei 4 gleichzeitig wartenden Spielern entstehen zwei Paare", async () => {
@@ -265,8 +295,7 @@ describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", 
     a.client.send({ type: "CAROUSEL_JOIN" });
     b.client.send({ type: "CAROUSEL_JOIN" });
     const firstLobby = await a.client.waitFor("LOBBY_STATE", 2000);
-    await playFullMatch([a, b], 2);
-    await a.client.waitFor("MATCH_RESULT", 2000);
+    await playTugOfWarMatch(a.client, [a, b], (playerId) => (playerId === a.playerId ? -5 : -45));
     await b.client.waitFor("MATCH_RESULT", 2000);
 
     // A sucht sich einen neuen Gegner, C wartet bereits.
@@ -352,23 +381,17 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
     const started = await host.client.waitFor("LOBBY_STATE", 2000);
     expect(started.lobby.matchMode).toBe("duell");
     const matchStarted = await host.client.waitFor("MATCH_STARTED", 2000);
-    expect(matchStarted.totalRounds).toBe(10); // Best-of-5 = 5 Zyklen a 2 Spieler
+    expect(matchStarted.style).toBe("tugofwar");
 
-    // Host immer lauter als Gast, damit jeder Zyklus eindeutig entschieden wird
-    // (identische Frames wuerden sonst zu einem 0:0-Unentschieden fuehren).
-    const players = { [host.playerId]: host, [guest.playerId]: guest };
-    for (let round = 0; round < 10; round += 1) {
-      const roundStarted = await host.client.waitFor("ROUND_STARTED", 3000);
-      const barker = players[roundStarted.barkerPlayerId]!;
-      const peak = barker === host ? -3 : -30;
-      barker.client.send({ type: "BARK_SUBMIT", frames: makeFrames(peak) });
-      await host.client.waitFor("ROUND_RESULT", 3000);
-    }
-    const result = await host.client.waitFor("MATCH_RESULT", 2000);
+    // Host immer lauter als Gast -> Seil zieht deterministisch zum Host,
+    // kein Zufall und kein fester Rundenzaehler entscheidet.
+    const result = await playTugOfWarMatch(host.client, [host, guest], (playerId) =>
+      playerId === host.playerId ? -3 : -30,
+    );
     expect(result.standings).toHaveLength(2);
     expect(result.standings[0]?.playerId).toBe(host.playerId);
-    expect(result.standings[0]?.wins).toBe(5);
-    expect(result.standings[1]?.wins).toBe(0);
+    expect(result.standings[0]?.rank).toBe(1);
+    expect(result.standings[1]?.rank).toBe(2);
   }, 15000);
 
   it("Echter Ton: eine gesendete Audio-Aufnahme wird an den Mitspieler relayed", async () => {
@@ -478,23 +501,18 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
     host.client.send({ type: "LOBBY_START" });
 
     const players = [host, p2, p3];
-    let finalResult: Extract<ServerMessage, { type: "MATCH_RESULT" }> | null = null;
-    // 3 Spieler, Best-of-3 pro Matchup: Runde 1 (1 Freilos + 1 Matchup a 6
-    // Baellen) + Finale (1 Matchup a 6 Baellen) = maximal 12 Baelle - 20 ist
-    // grosszuegig, damit ein echter Fehler den Test timeout-faellt statt
-    // endlos laeuft.
-    for (let safety = 0; safety < 20 && !finalResult; safety += 1) {
-      const next = await host.client.waitForEither("ROUND_STARTED", "MATCH_RESULT", 3000);
-      if (next.type === "MATCH_RESULT") {
-        finalResult = next;
-        break;
-      }
-      const barker = players.find((p) => p.playerId === next.barkerPlayerId)!;
-      barker.client.send({ type: "BARK_SUBMIT", frames: makeFrames(-5) });
-      await host.client.waitFor("ROUND_RESULT", 3000);
-    }
-    expect(finalResult).not.toBeNull();
-    expect(finalResult!.standings.find((s) => s.rank === 1)).toBeDefined();
+    // Jeder Spieler bellt konstant unterschiedlich laut (Host am lautesten,
+    // P3 am leisesten) -> jedes Matchup (Tauzieh) loest sich deterministisch
+    // in wenigen Runden auf, unabhaengig davon wer das Freilos bekommt.
+    // 60 Runden Sicherheitsgrenze ist grosszuegig fuer 2 Matchups.
+    const peakByPlayer = new Map<string, number>([
+      [host.playerId, -5],
+      [p2.playerId, -20],
+      [p3.playerId, -45],
+    ]);
+    const finalResult = await playTugOfWarMatch(host.client, players, (playerId) => peakByPlayer.get(playerId)!, 60);
+    expect(finalResult.standings.find((s) => s.rank === 1)).toBeDefined();
+    expect(finalResult.standings[0]?.playerId).toBe(host.playerId);
   }, 20000);
 
   it("Disconnect mitten in der Runde, dann Reconnect mit Sitzung", async () => {
