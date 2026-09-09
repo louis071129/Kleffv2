@@ -1,2 +1,10 @@
-// Wird in Phase 2 mit Zod-Schemas, Reducern und Matchmaking gefuellt.
 export const PROTOCOL_VERSION = 1;
+
+export * from "./types.js";
+export * from "./schema.js";
+export * from "./lobby.js";
+export * from "./lobby-code.js";
+export * from "./matchmaking.js";
+export * from "./match.js";
+export * from "./nickname-filter.js";
+export * from "./report.js";

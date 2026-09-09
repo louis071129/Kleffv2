@@ -71,3 +71,36 @@ Testergebnisse (14 Tests, alle grün):
 - AGC-Modus verändert die Rangfolge bark-loud > scream nicht ✓
 - Offline- und Streaming-Extraktion sind framegleich ✓
 
+## Phase 2 – Protokoll und State-Machine
+
+Status: abgeschlossen. `npm run verify` grün (60 Tests, alle ohne Netzwerk).
+
+Aufgebaut in `packages/protocol`:
+- `schema.ts`: Zod-Schemas für das komplette WebSocket-Protokoll (Client→Server und
+  Server→Client als discriminated unions), `AudioFrame`/`CalibrationProfile`/`BarkScore`
+  gespiegelt aus `@klaeff/scoring`. `parseClientMessage`/`parseServerMessage` validieren
+  streng (z.B. `LEVEL_UPDATE` nur 0..100, `EMOTE` nur die 8 festen Werte, kein Freitext-Chat
+  im Protokoll überhaupt vorgesehen).
+- `types.ts`: Domain-Typen (`Player`, `Lobby`, `Match`, `RoundResult`, `Standing`,
+  `AvatarSeed` mit den im Auftrag beschriebenen Kategorien).
+- `lobby.ts`: reiner Reducer für Lobby-Zustand. `evaluateCountdown()` ist eine reine
+  "Tick"-Funktion (kein Timer im State-Modul selbst - der Server ruft sie periodisch auf):
+  startet den 20s-Countdown bei 3 Spielern, füllt bis 6 auf ohne Reset, bricht ab wenn zu
+  viele wieder verlassen. Host-Übernahme wenn der Host eine private Lobby verlässt.
+- `matchmaking.ts`: öffentliche Warteschlange über mehrere Lobbys - neue Spieler füllen die
+  älteste offene Lobby mit Platz auf, sonst wird eine neue eröffnet.
+- `match.ts`: Rundenreihenfolge = Beitrittsreihenfolge, ein Ergebnis pro Spieler, nutzt
+  `compareBarkScores` aus `@klaeff/scoring` für die Rangliste. Spieler ohne Ergebnis
+  (Timeout) landen am Ende der Rangliste statt das Match zu blockieren.
+- `nickname-filter.ts`: Blockliste (deutsch/englisch) mit Leetspeak-Normalisierung
+  (3→e, 1→i, 0→o, @→a, $→s), generiert bei Treffer einen Fallback-Namen im Stil
+  "Klaeffender Keks 42" statt den Spieler zum Wiederholen zu zwingen.
+- `report.ts`: In-Memory-Ringpuffer (500 Einträge), Ausschluss aus der öffentlichen
+  Schnellsuche ab 3 Meldungen aus verschiedenen Lobbys innerhalb 24h.
+- `lobby-code.ts`: 6-stellige Codes ohne I, O, 0, 1.
+
+Ein Bug beim Schreiben der Tests gefunden und behoben: die erste Blockliste enthielt "ss" als
+eigenständigen NS-Bezugsbegriff (fürs Wort "SS"), das hätte aber "Assassin", "Kiss" und viele
+harmlose Namen fälschlich blockiert. Entfernt - die anderen NS-Begriffe ("hitler", "nazi",
+"sieg heil", "1488", "88") reichen als Signal. Siehe BLOCKERS.md.
+

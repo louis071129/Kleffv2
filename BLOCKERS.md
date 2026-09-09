@@ -21,3 +21,23 @@ Besitzer. Siehe PROGRESS.md Abschnitt Phase 4.
 
 GitHub-Zugriff läuft stattdessen über MCP-GitHub-Tools. Da keine PRs für dieses Projekt nötig
 sind (siehe Git-Workflow-Entscheidung oben), hat das keine praktische Auswirkung.
+
+## 2026-09-09 – Scoring: Attack/Crest/Charakter nur bei aktivem Signal werten
+
+Die wörtliche Spezifikation der Attack-Formel (Zeit von peak-20dB bis Peak) liefert bei reinem
+Rauschen/Stille zufällig eine sehr kurze "Attack-Zeit", weil alle Frame-Peaks in einem
+Rauschsignal zufällig nah beieinander liegen – das Silence-Fixture bekam dadurch volle
+Attack-Punktzahl (20) und verletzte die Anforderung "silence < 5" (Ergebnis: 12 statt <5).
+Entscheidung: Attack, Crest und Bell-Charakter werden nur berechnet, wenn es aktive Frames
+gibt (RMS über Rauschboden+10dB) – ohne aktives Signal gibt es kein "Bellereignis" zu bewerten.
+Das ist eine Präzisierung, keine Abkehr vom Sinn der Spezifikation. Danach: silence = 0. Siehe
+PROGRESS.md Phase 1.
+
+## 2026-09-09 – Nickname-Filter: "ss" als NS-Begriff entfernt
+
+Die erste Version der Blockliste enthielt das blosse Kuerzel "ss" um Bezuege auf die
+Waffen-SS zu erkennen. Beim Testen faellt auf: das blockt auch "Assassin", "Kiss" und jeden
+anderen Namen mit "ss" darin - unbrauchbar breit. Entfernt, ohne Ersatz. Die anderen
+NS-Begriffe im Filter ("hitler", "nazi", "sieg heil", "1488", "88", "adolf", "auschwitz",
+"holocaust") bleiben und reichen als Signal fuer den eindeutigen Fall. Ehrlich: ein
+generisches SS-Kuerzel laesst sich ohne massive False-Positives kaum zuverlaessig filtern.
