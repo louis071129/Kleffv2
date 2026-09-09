@@ -116,3 +116,16 @@ robuster fuer genau dieses kleine, isolierte Popup. Nach dem Fix per Screenshot 
 sauberes 4x2-Raster, Klick auf ein Emote funktioniert, die Sprechblase erscheint korrekt ueber
 dem Avatar. Wieder ein Beleg dafuer, dass visuelles Testen mit echtem Browser Bugs findet, die
 Typecheck/Lint/Build nicht sehen (alle drei waren durchgehend gruen, obwohl das Rad kaputt war).
+
+## 2026-09-09 – render.yaml zeigte auf einen nicht existierenden main-Branch
+
+Beim Ergaenzen des Passwort-Gates (auf Wunsch des Besitzers, der noch in dieser Nacht auf dem
+iPad deployen wollte) aufgefallen: `render.yaml` hatte `branch: main` konfiguriert, aber dieser
+Branch existiert in diesem Repo nicht (das Repo war beim Sessionstart komplett leer, siehe
+Phase-0-Eintrag, und diese Session pusht ausschliesslich auf ihren eigenen Branch
+`claude/klaeff-multiplayer-game-ur6t7v` - Plattformregel dieser Session, siehe PROGRESS.md
+"Abweichungen von der Aufgabenbeschreibung"). Ein Render-Blueprint-Deploy nach Anleitung waere
+damit fehlgeschlagen oder haette den Service nie automatisch aktuell gehalten. Fix:
+`render.yaml`'s `branch:` auf `claude/klaeff-multiplayer-game-ur6t7v` umgestellt (mit Kommentar
+im File, das bei einem spaeteren Merge nach main zurueckzustellen). Kein Push nach main noetig
+fuer diesen Fix - nur eine Konfigurationsdatei auf dem eigenen Branch geaendert.

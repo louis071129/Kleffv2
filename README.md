@@ -210,6 +210,17 @@ framegleich).
 
 `npm run verify` fasst Lint+Typecheck+Test zusammen und läuft vor jedem Commit.
 
+## Passwort-Gate ("Bald verfügbar")
+
+Solange das Spiel nicht öffentlich sein soll, sperrt `middleware.ts` alle Seiten (und
+`server/index.ts` zusätzlich die `/ws`-Route, damit es keine Hintertür gibt) hinter einem
+gemeinsamen Passwort (`GATE_PASSWORD`, Default `lars`). `/api/health` bleibt bewusst
+ungesperrt, sonst würde Render den Service für "nicht gesund" halten. Wie das Passwort auf
+`localStorage`-Ebene liegen andere Sicherheitsmechanismen in diesem Projekt ist das **kein
+echtes Sicherheitssystem** – ein Cookie mit einem geteilten Passwort ist trivial umgehbar,
+sobald jemand es kennt. Es ist eine Reibungsbremse gegen zufällige Besucher, keine
+Zugriffskontrolle.
+
 ## Bekannte Grenzen
 
 - Kein echtes Anti-Cheat gegen "Lautsprecher ans Mikro halten" (siehe oben).

@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import next from "next";
 import { WebSocketServer } from "ws";
 import { getGameServer } from "./game-server.js";
+import { hasGateCookie } from "../lib/gate.js";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = Number.parseInt(process.env.PORT ?? "3000", 10);
@@ -25,6 +26,12 @@ async function main(): Promise<void> {
 
   httpServer.on("upgrade", (req, socket, head) => {
     if (req.url === "/ws") {
+      // Dasselbe Passwort-Gate wie fuer die Seiten (siehe middleware.ts) -
+      // sonst waere die WebSocket-Route eine Hintertuer am Gate vorbei.
+      if (!hasGateCookie(req.headers.cookie)) {
+        socket.destroy();
+        return;
+      }
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
       });

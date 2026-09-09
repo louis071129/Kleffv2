@@ -429,3 +429,41 @@ eines echten Zwei-Spieler-Matches mit synthetischem Audio) liegen als Build-Arte
 `e2e`-CI-Job auf GitHub Actions (Tab "Actions" im Repo, neuester erfolgreicher Lauf, Artefakt
 "e2e-artifacts") - nicht im Repo selbst, weil sie bei jedem Lauf neu erzeugt werden.
 
+## Nach Phase 9 – Passwort-Gate ("Bald verfügbar")
+
+Auf Wunsch des Besitzers nachträglich ergänzt, weil er das Spiel noch heute Nacht/morgens auf
+dem iPad testen will, es aber noch nicht öffentlich sein soll.
+
+- `lib/gate.ts`: framework-freie Kernlogik (Passwortvergleich, Cookie-Name/-Wert), damit
+  dieselbe Prüfung sowohl in der Next.js-Middleware (Edge-Runtime) als auch im
+  Node-Custom-Server (WebSocket-Upgrade) funktioniert.
+- `middleware.ts`: sperrt jede Seite ohne gültiges Gate-Cookie hinter `/gate` (per Rewrite,
+  nicht Redirect - die ursprünglich angefragte URL bleibt in der Adressleiste erhalten, z.B.
+  ein `/j/CODE`-Einladungslink funktioniert direkt nach dem Entsperren). `/api/health` und
+  `/api/gate` sind bewusst ausgenommen, sonst hätte Render den Service für "nicht gesund"
+  gehalten.
+- `server/index.ts`: derselbe Cookie-Check auch beim WebSocket-Upgrade auf `/ws` - sonst wäre
+  das eine Hintertür am Seiten-Gate vorbei gewesen.
+- `app/gate/page.tsx` + `app/api/gate/route.ts`: "Bald verfügbar 🐕"-Screen im Designsystem,
+  Passwort-Eingabe, 90-Tage-Cookie nach Erfolg.
+- Passwort: `GATE_PASSWORD` (Env-Var), Default **`lars`** wenn nicht gesetzt. In `render.yaml`
+  bereits als Env-Var vorbelegt.
+- **Ehrlich, wie überall in diesem Projekt**: kein echtes Sicherheitssystem, ein geteiltes
+  Passwort in einem Cookie ist trivial umgehbar. Reine Reibungsbremse gegen zufällige
+  Besucher vor dem offiziellen Start.
+- `e2e/gate.spec.ts`: zwei neue Tests (Gate zeigt sich ohne Cookie, falsches Passwort wird
+  abgelehnt, "lars" lässt rein; die `/ws`-Route ist ohne Cookie ebenfalls dicht). Alle
+  bestehenden E2E-Helfer (`e2e/helpers.ts`) setzen das Cookie jetzt automatisch, damit die
+  Spiel-Flow-Tests nicht bei jedem Lauf erst das Gate durchklicken müssen.
+
+**Wichtiger Fund beim Umsetzen:** `render.yaml` war auf `branch: main` konfiguriert - dieser
+Branch existiert in diesem Repo aber gar nicht (siehe Phase-0-Eintrag oben, komplett leeres
+Repo beim Start, diese Session pusht ausschließlich auf ihren eigenen Branch). Ohne Korrektur
+hätte Render beim Blueprint-Deploy ins Leere gegriffen. Auf `claude/klaeff-multiplayer-game-ur6t7v`
+umgestellt - das ist aktuell auch der einzige Branch im Repo und (weil er als erster Branch in
+ein leeres Repo gepusht wurde) der GitHub-Default-Branch, Render sollte ihn beim
+Blueprint-Import also automatisch anbieten. Siehe BLOCKERS.md.
+
+Alle 7 E2E-Tests (inkl. der 2 neuen Gate-Tests) und alle 75 Unit-/Integrationstests laufen
+weiterhin grün, `npm run build` ebenfalls (Middleware taucht jetzt im Build-Output auf).
+

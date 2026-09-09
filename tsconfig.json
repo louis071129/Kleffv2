@@ -30,6 +30,7 @@
     "plugins": [{ "name": "next" }]
   },
   "include": [
+    "middleware.ts",
     "app/**/*.ts",
     "app/**/*.tsx",
     "components/**/*.ts",

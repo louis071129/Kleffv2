@@ -1,5 +1,5 @@
 import { test } from "@playwright/test";
-import { createPrivateLobby } from "./helpers";
+import { createPrivateLobby, unlockGate } from "./helpers";
 
 /**
  * Laeuft nur in den ipad-landscape/ipad-portrait-Projekten (siehe
@@ -8,6 +8,7 @@ import { createPrivateLobby } from "./helpers";
  */
 test.describe("iPad-Screenshots", () => {
   test("Startseite und Lobby", async ({ page }, testInfo) => {
+    await unlockGate(page);
     await page.goto("/");
     await page.screenshot({ path: `artifacts/e2e/ipad-home-${testInfo.project.name}.png` });
 

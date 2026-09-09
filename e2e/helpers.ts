@@ -1,4 +1,21 @@
 import type { Page } from "@playwright/test";
+import { GATE_COOKIE_NAME, GATE_COOKIE_VALUE } from "../lib/gate";
+
+/**
+ * Setzt das Passwort-Gate-Cookie direkt (statt sich durch den "Bald
+ * verfuegbar"-Screen zu klicken) - hier geht es um die Spiel-Flows, das
+ * Gate selbst hat einen eigenen Test (gate.spec.ts).
+ */
+export async function unlockGate(page: Page): Promise<void> {
+  await page.context().addCookies([
+    {
+      name: GATE_COOKIE_NAME,
+      value: GATE_COOKIE_VALUE,
+      domain: "127.0.0.1",
+      path: "/",
+    },
+  ]);
+}
 
 /**
  * Klickt sich durch Mikro-Freigabe und Kalibrierung (3 echte 3s-Schritte,
@@ -17,12 +34,14 @@ export async function completeMicAndCalibration(page: Page): Promise<void> {
 }
 
 export async function joinPublicQueue(page: Page): Promise<void> {
+  await unlockGate(page);
   await page.goto("/");
   await page.getByText("Schnellsuche").click();
   await completeMicAndCalibration(page);
 }
 
 export async function createPrivateLobby(page: Page): Promise<string> {
+  await unlockGate(page);
   await page.goto("/");
   await page.getByText("Private Lobby erstellen").click();
   await completeMicAndCalibration(page);
@@ -33,6 +52,7 @@ export async function createPrivateLobby(page: Page): Promise<string> {
 }
 
 export async function joinPrivateLobby(page: Page, code: string): Promise<void> {
+  await unlockGate(page);
   await page.goto(`/j/${code}`);
   await page.getByRole("button", { name: "Los" }).click();
   await completeMicAndCalibration(page);

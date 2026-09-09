@@ -34,12 +34,22 @@ ca. 3-5 Minuten (Next.js-Build). Der Fortschritt läuft live im Log-Fenster mit,
 ## Schritt 4 – Testen
 
 1. Tippe auf die URL oben im Service-Dashboard (etwas wie `https://klaeff.onrender.com`).
-2. Safari öffnet die KLÄFF-Startseite. Wenn du stattdessen JSON mit `"status":"ok"` siehst,
-   warst du auf `/api/health` gelandet - das ist der Health-Check-Endpunkt und ein gutes
-   Zeichen, dass der Server läuft. Geh zurück zur Basis-URL ohne `/api/health`.
+2. Safari zeigt zuerst einen Sperrbildschirm **"Bald verfügbar"** - das Spiel ist absichtlich
+   noch nicht öffentlich. Passwort eingeben: **`lars`**, dann auf "Rein" tippen. Danach lädt
+   die richtige KLÄFF-Startseite. (Wenn du stattdessen JSON mit `"status":"ok"` siehst, warst
+   du auf `/api/health` gelandet - das ist nur der Health-Check-Endpunkt, geh zurück zur
+   Basis-URL.)
+3. Das Passwort gilt pro Browser für 90 Tage (Cookie). Wer den Link weitergibt, braucht das
+   Passwort auch - das ist Absicht, solange das Spiel nicht öffentlich sein soll.
 
-Von da an deployt Render **automatisch** bei jedem Push auf `main` neu (steht so in
-`render.yaml`, `autoDeployTrigger: commit`) - du musst danach nichts mehr manuell anstoßen.
+Das Passwort ändern: in Render unter dem Service → **Environment** die Variable
+`GATE_PASSWORD` auf einen neuen Wert setzen (dort schon als `lars` vorbelegt, siehe
+`render.yaml`) und speichern - Render startet den Service danach automatisch neu.
+
+Von da an deployt Render **automatisch** bei jedem Push auf den Branch, der in `render.yaml`
+unter `branch:` steht (aktuell `claude/klaeff-multiplayer-game-ur6t7v` - dieses Repo hatte
+beim Start noch keinen `main`-Branch, siehe `PROGRESS.md`) neu (`autoDeployTrigger: commit`) -
+du musst danach nichts mehr manuell anstoßen.
 
 ## Free-Plan-Hinweis
 

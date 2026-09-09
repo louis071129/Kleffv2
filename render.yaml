@@ -6,9 +6,15 @@ services:
     dockerContext: .
     plan: free
     region: frankfurt
-    branch: main
+    # WICHTIG: main existiert in diesem Repo noch nicht (siehe PROGRESS.md/
+    # BLOCKERS.md - komplett leeres Repo beim Start, diese Session pusht per
+    # Plattformregel nur auf ihren eigenen Branch). Sobald der Besitzer diesen
+    # Branch nach main mergt, hier auf "main" umstellen.
+    branch: claude/klaeff-multiplayer-game-ur6t7v
     healthCheckPath: /api/health
     autoDeployTrigger: commit
     envVars:
       - key: NODE_ENV
         value: production
+      - key: GATE_PASSWORD
+        value: lars
