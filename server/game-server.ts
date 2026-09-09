@@ -4,29 +4,43 @@ import { scoreBark, type AudioFrame, type BarkScore, type CalibrationProfile } f
 import {
   addPlayer,
   addReport,
-  createMatch,
+  advanceBracket,
+  buildDuelPlayerOrder,
+  buildRudelPlayerOrder,
+  computeAggregateStandings,
+  computeDuelStandings,
+  computeStandings,
+  createBracket,
+  createCarouselState,
+  createMatchWithOrder,
   createPrivateLobby,
-  createPublicLobby,
   createReportState,
   currentBarker,
-  computeStandings,
-  evaluateCountdown,
+  dequeueFromCarousel,
+  enqueueForCarousel,
+  isCurrentRoundComplete,
   isDeviceExcludedFromPublicQueue,
   isMatchFinished,
-  BarkScoreSchema,
+  isQueued,
   kickPlayer,
   LobbyError,
-  LobbySnapshotSchema,
-  markConnection,
   MatchError,
+  nextUndecidedMatchup,
   parseClientMessage,
+  recordMatchupResult,
   removePlayer,
   sanitizeNickname,
+  setAudioMode,
+  setMatchMode,
+  setMaxPlayers,
   startPrivateLobby,
   submitRoundResult,
+  tryPairNext,
 } from "@klaeff/protocol";
 import type {
+  AudioMode,
   AvatarSeed,
+  BracketState,
   ClientMessage,
   DeviceUuid,
   Lobby,
@@ -35,15 +49,22 @@ import type {
   MatchId,
   Player,
   PlayerId,
+  PrivateMatchMode,
   ServerMessage,
+  Standing,
 } from "@klaeff/protocol";
-import type { z } from "zod";
 
-const PUBLIC_QUEUE_MODE = "public" as const;
+/** Best-of-5 fuer den reinen 2-Spieler-Duell-Modus in privaten Lobbys, siehe Auftrag. */
+const DUEL_BEST_OF = 5;
+/** Rudel: alle Spieler nacheinander, das Ganze fuer 3 Zyklen ("Ranking ueber 3 Runden"), siehe Auftrag. */
+const RUDEL_CYCLES = 3;
+/** Best-of-3 pro Kläffduell-Matchup im K.-o.-Bracket, siehe Auftrag. */
+const BRACKET_BEST_OF = 3;
+
+type MatchKind = "carousel" | "duell" | "rudel" | "bracket";
 
 export interface GameServerOptions {
   readonly roundTimeoutMs?: number;
-  readonly countdownMs?: number;
   readonly tickIntervalMs?: number;
   readonly disconnectGraceMs?: number;
   readonly heartbeatIntervalMs?: number;
@@ -91,12 +112,17 @@ export class GameServer {
   private readonly sessionsByPlayerId = new Map<PlayerId, ServerSession>();
   private readonly lobbies = new Map<LobbyId, Lobby>();
   private readonly matches = new Map<MatchId, Match>();
+  private readonly matchKindByMatchId = new Map<MatchId, MatchKind>();
   private readonly lobbyIdByPlayerId = new Map<PlayerId, LobbyId>();
   private readonly matchIdByLobbyId = new Map<LobbyId, MatchId>();
+  private readonly bracketByLobbyId = new Map<LobbyId, BracketState>();
+  private readonly currentMatchupByLobbyId = new Map<LobbyId, string>();
   private readonly calibrationByPlayerId = new Map<PlayerId, CalibrationProfile>();
   private readonly envelopeHistoryByPlayerId = new Map<PlayerId, number[][]>();
   private readonly lastLevelBroadcastAt = new Map<PlayerId, number>();
   private readonly roundTimers = new Map<MatchId, RoundTimer>();
+  private readonly playerProfiles = new Map<PlayerId, { nickname: string; avatar: AvatarSeed; deviceUuid: DeviceUuid }>();
+  private carouselState = createCarouselState();
   private reportState = createReportState();
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -104,7 +130,6 @@ export class GameServer {
   constructor(options: GameServerOptions = {}) {
     this.options = {
       roundTimeoutMs: options.roundTimeoutMs ?? 6_000,
-      countdownMs: options.countdownMs ?? 20_000,
       tickIntervalMs: options.tickIntervalMs ?? 1_000,
       disconnectGraceMs: options.disconnectGraceMs ?? 60_000,
       heartbeatIntervalMs: options.heartbeatIntervalMs ?? 15_000,
@@ -189,13 +214,21 @@ export class GameServer {
     });
   }
 
-  health(): { status: "ok"; uptimeSeconds: number; version: string; activeLobbies: number; playerCount: number } {
+  health(): {
+    status: "ok";
+    uptimeSeconds: number;
+    version: string;
+    activeLobbies: number;
+    playerCount: number;
+    carouselQueueSize: number;
+  } {
     return {
       status: "ok",
       uptimeSeconds: Math.floor((this.now() - this.startedAt) / 1000),
       version: process.env.npm_package_version ?? "0.1.0",
       activeLobbies: this.lobbies.size,
       playerCount: this.sessionsByPlayerId.size,
+      carouselQueueSize: this.carouselState.queue.length,
     };
   }
 
@@ -255,8 +288,6 @@ export class GameServer {
     return session;
   }
 
-  private readonly playerProfiles = new Map<PlayerId, { nickname: string; avatar: AvatarSeed; deviceUuid: DeviceUuid }>();
-
   private createOrphanSession(ws: WebSocket): ServerSession {
     // Fallback falls ein RECONNECT ohne gueltige Sitzung ankommt: wie ein HELLO behandeln
     // ist hier nicht moeglich (keine Nickname/Avatar-Daten) - Verbindung bleibt ohne Session.
@@ -295,11 +326,14 @@ export class GameServer {
         return;
       }
 
-      case "QUICKMATCH_JOIN":
-        this.handleQuickmatchJoin(session, now);
+      case "CAROUSEL_JOIN":
+        this.handleCarouselJoin(session, now);
         return;
 
-      case "QUICKMATCH_LEAVE":
+      case "CAROUSEL_LEAVE":
+        this.handleCarouselLeave(session);
+        return;
+
       case "LOBBY_LEAVE":
         this.handleLeaveLobby(session, now);
         return;
@@ -316,6 +350,18 @@ export class GameServer {
         this.handleLobbyKick(session, message.targetPlayerId, now);
         return;
 
+      case "LOBBY_SET_MAX_PLAYERS":
+        this.withOwnLobby(session, (lobby) => setMaxPlayers(lobby, session.playerId, message.maxPlayers, now));
+        return;
+
+      case "LOBBY_SET_MATCH_MODE":
+        this.withOwnLobby(session, (lobby) => setMatchMode(lobby, session.playerId, message.matchMode, now));
+        return;
+
+      case "LOBBY_SET_AUDIO_MODE":
+        this.withOwnLobby(session, (lobby) => setAudioMode(lobby, session.playerId, message.audioMode, now));
+        return;
+
       case "LOBBY_START":
         this.handleLobbyStart(session, now);
         return;
@@ -330,6 +376,14 @@ export class GameServer {
 
       case "BARK_SUBMIT":
         this.handleBarkSubmit(session, message.frames, now);
+        return;
+
+      case "BARK_FRAME":
+        this.handleBarkFrame(session, message.frame);
+        return;
+
+      case "AUDIO_BLOB_SUBMIT":
+        this.handleAudioBlobSubmit(session, message);
         return;
 
       case "EMOTE": {
@@ -372,40 +426,84 @@ export class GameServer {
     };
   }
 
-  private handleQuickmatchJoin(session: ServerSession, now: number): void {
-    if (this.lobbyIdByPlayerId.has(session.playerId)) {
+  /** Hilfsfunktion fuer die drei Host-Einstellungs-Nachrichten (Modus/Ton/Spielerzahl). */
+  private withOwnLobby(session: ServerSession, apply: (lobby: Lobby) => Lobby): void {
+    const lobbyId = this.lobbyIdByPlayerId.get(session.playerId);
+    const lobby = lobbyId ? this.lobbies.get(lobbyId) : undefined;
+    if (!lobby) {
+      return;
+    }
+    let updated: Lobby;
+    try {
+      updated = apply(lobby);
+    } catch (error) {
+      this.sendLobbyError(session, error);
+      return;
+    }
+    this.lobbies.set(lobby.id, updated);
+    this.broadcastToLobby(lobby.id, { type: "LOBBY_STATE", lobby: toSnapshot(updated) });
+  }
+
+  // --- Kläffkarussell ------------------------------------------------------
+
+  private handleCarouselJoin(session: ServerSession, now: number): void {
+    const existingLobbyId = this.lobbyIdByPlayerId.get(session.playerId);
+    if (existingLobbyId) {
+      const existingLobby = this.lobbies.get(existingLobbyId);
+      if (existingLobby && existingLobby.phase !== "finished") {
+        return; // noch in einer laufenden Begegnung
+      }
+      // Vorherige, bereits beendete Kläffkarussell-Begegnung verlassen, bevor neu eingereiht wird.
+      this.lobbyIdByPlayerId.delete(session.playerId);
+    }
+    if (isQueued(this.carouselState, session.playerId)) {
       return;
     }
     if (isDeviceExcludedFromPublicQueue(this.reportState, session.deviceUuid, now)) {
       this.sendToSession(session, {
         type: "ERROR",
-        code: "PUBLIC_QUEUE_EXCLUDED",
-        message: "Du wurdest zu oft gemeldet und bist vorerst von der oeffentlichen Schnellsuche ausgeschlossen. Private Lobbys gehen weiterhin.",
+        code: "CAROUSEL_EXCLUDED",
+        message: "Du wurdest zu oft gemeldet und bist vorerst vom Kläffkarussell ausgeschlossen. Private Lobbys gehen weiterhin.",
       });
       return;
     }
 
-    const openLobby = [...this.lobbies.values()]
-      .filter((l) => l.mode === PUBLIC_QUEUE_MODE && (l.phase === "waiting" || l.phase === "countdown") && l.players.length < l.maxPlayers)
-      .sort((a, b) => a.createdAt - b.createdAt)[0];
-
-    const lobby = openLobby ?? createPublicLobby(now);
     const player = this.buildPlayer(session, now);
+    this.carouselState = enqueueForCarousel(this.carouselState, player, now);
+    this.sendToSession(session, { type: "CAROUSEL_QUEUED" });
+    this.advanceCarousel(now);
+  }
 
-    let updated: Lobby;
-    try {
-      updated = addPlayer(lobby, player, now);
-    } catch (error) {
-      this.sendLobbyError(session, error);
+  private handleCarouselLeave(session: ServerSession): void {
+    this.carouselState = dequeueFromCarousel(this.carouselState, session.playerId);
+    const lobbyId = this.lobbyIdByPlayerId.get(session.playerId);
+    if (!lobbyId) {
       return;
     }
-
-    this.lobbies.set(updated.id, updated);
-    this.lobbyIdByPlayerId.set(session.playerId, updated.id);
-    this.sendToSession(session, { type: "QUICKMATCH_QUEUED", lobbyId: updated.id });
-    this.broadcastToLobby(updated.id, { type: "LOBBY_STATE", lobby: toSnapshot(updated) });
-    this.maybeAdvanceLobby(updated.id, now);
+    const lobby = this.lobbies.get(lobbyId);
+    if (lobby && lobby.mode === "carousel") {
+      this.lobbyIdByPlayerId.delete(session.playerId);
+    }
   }
+
+  private advanceCarousel(now: number): void {
+    for (;;) {
+      const result = tryPairNext(this.carouselState, now);
+      this.carouselState = result.state;
+      if (!result.lobby) {
+        return;
+      }
+      const lobby = result.lobby;
+      this.lobbies.set(lobby.id, lobby);
+      for (const player of lobby.players) {
+        this.lobbyIdByPlayerId.set(player.id, lobby.id);
+      }
+      this.broadcastToLobby(lobby.id, { type: "LOBBY_STATE", lobby: toSnapshot(lobby) });
+      this.beginMatch(lobby.id, lobby.players.map((p) => p.id), "carousel", now);
+    }
+  }
+
+  // --- Private Lobby -------------------------------------------------------
 
   private handleLobbyCreate(session: ServerSession, now: number): void {
     if (this.lobbyIdByPlayerId.has(session.playerId)) {
@@ -454,6 +552,8 @@ export class GameServer {
     if (updated.players.length === 0) {
       this.lobbies.delete(lobbyId);
       this.matchIdByLobbyId.delete(lobbyId);
+      this.bracketByLobbyId.delete(lobbyId);
+      this.currentMatchupByLobbyId.delete(lobbyId);
     } else {
       this.lobbies.set(lobbyId, updated);
       this.broadcastToLobby(lobbyId, { type: "LOBBY_STATE", lobby: toSnapshot(updated) });
@@ -496,6 +596,7 @@ export class GameServer {
       return;
     }
     this.lobbies.set(lobby.id, updated);
+    this.broadcastToLobby(lobby.id, { type: "LOBBY_STATE", lobby: toSnapshot(updated) });
     this.startMatchForLobby(updated, now);
   }
 
@@ -510,6 +611,44 @@ export class GameServer {
     }
     this.lastLevelBroadcastAt.set(session.playerId, now);
     this.broadcastToLobby(lobbyId, { type: "LEVEL_BROADCAST", playerId: session.playerId, level });
+  }
+
+  private handleBarkFrame(session: ServerSession, frame: AudioFrame): void {
+    const lobbyId = this.lobbyIdByPlayerId.get(session.playerId);
+    if (!lobbyId) {
+      return;
+    }
+    const lobby = this.lobbies.get(lobbyId);
+    // Live-Relay nur noetig, wenn der Empfaenger einen Bark-Synth rendert
+    // (Kläffkarussell oder eine private Lobby mit abgeschaltetem "Echter Ton").
+    if (!lobby || lobby.audioMode !== "synth") {
+      return;
+    }
+    this.broadcastToLobby(lobbyId, { type: "BARK_FRAME_BROADCAST", playerId: session.playerId, frame });
+  }
+
+  private handleAudioBlobSubmit(session: ServerSession, message: Extract<ClientMessage, { type: "AUDIO_BLOB_SUBMIT" }>): void {
+    const lobbyId = this.lobbyIdByPlayerId.get(session.playerId);
+    if (!lobbyId) {
+      return;
+    }
+    const lobby = this.lobbies.get(lobbyId);
+    // Echter Ton ist ausschliesslich in privaten Lobbys mit aktivem
+    // "Echter Ton"-Modus erlaubt - harte Sicherheitsgrenze, siehe Auftrag.
+    if (!lobby || lobby.mode !== "private" || lobby.audioMode !== "real") {
+      return;
+    }
+    // Bewusst NICHT serverseitig zwischengespeichert (auch nicht kurz): direktes
+    // Weiterreichen an die Lobby ist die konservativste Umsetzung von "nur
+    // in-memory, nie auf Disk, wird beim Rundenwechsel verworfen" - siehe
+    // BLOCKERS.md.
+    this.broadcastToLobby(lobbyId, {
+      type: "AUDIO_BLOB_BROADCAST",
+      playerId: session.playerId,
+      roundIndex: message.roundIndex,
+      mimeType: message.mimeType,
+      dataBase64: message.dataBase64,
+    });
   }
 
   private handleReportPlayer(session: ServerSession, targetPlayerId: PlayerId, now: number): void {
@@ -547,31 +686,107 @@ export class GameServer {
 
   // --- Match-Flows -------------------------------------------------------
 
-  private maybeAdvanceLobby(lobbyId: LobbyId, now: number): void {
+  /** Waehlt Rundenreihenfolge + Match-Art passend zum Lobby-/Modus-Typ und startet das erste Match. */
+  private startMatchForLobby(lobby: Lobby, now: number): void {
+    if (lobby.mode === "private" && lobby.matchMode === "bracket") {
+      this.startBracket(lobby, now);
+      return;
+    }
+    const playerIds = lobby.players.map((p) => p.id);
+    if (lobby.mode === "carousel") {
+      this.beginMatch(lobby.id, playerIds, "carousel", now);
+      return;
+    }
+    if (lobby.matchMode === "duell") {
+      const [a, b] = playerIds;
+      if (a && b) {
+        this.beginMatch(lobby.id, buildDuelPlayerOrder(a, b, DUEL_BEST_OF), "duell", now);
+      }
+      return;
+    }
+    // "rudel" (auch Fallback, falls matchMode wider Erwarten null waere - lobby.ts
+    // laesst startPrivateLobby das aber nie zu).
+    this.beginMatch(lobby.id, buildRudelPlayerOrder(playerIds, RUDEL_CYCLES), "rudel", now);
+  }
+
+  private beginMatch(lobbyId: LobbyId, playerOrder: readonly PlayerId[], kind: MatchKind, now: number): void {
+    const match = createMatchWithOrder(lobbyId, playerOrder, now);
+    this.matches.set(match.id, match);
+    this.matchIdByLobbyId.set(lobbyId, match.id);
+    this.matchKindByMatchId.set(match.id, kind);
+    this.broadcastToLobby(lobbyId, {
+      type: "MATCH_STARTED",
+      matchId: match.id,
+      playerOrder: [...match.playerOrder],
+      totalRounds: match.playerOrder.length,
+    });
+    this.startRound(match, lobbyId);
+  }
+
+  // --- Kläffduell (K.-o.-Bracket) ------------------------------------------
+
+  private startBracket(lobby: Lobby, now: number): void {
+    const bracket = createBracket(lobby.players.map((p) => p.id));
+    this.bracketByLobbyId.set(lobby.id, bracket);
+    this.advanceBracketFlow(lobby.id, now);
+  }
+
+  private advanceBracketFlow(lobbyId: LobbyId, now: number): void {
+    let bracket = this.bracketByLobbyId.get(lobbyId);
+    if (!bracket) {
+      return;
+    }
+    if (bracket.champion === null && isCurrentRoundComplete(bracket)) {
+      bracket = advanceBracket(bracket);
+      this.bracketByLobbyId.set(lobbyId, bracket);
+    }
+
+    this.broadcastToLobby(lobbyId, { type: "BRACKET_STATE", matchups: [...bracket.matchups], champion: bracket.champion });
+
+    if (bracket.champion !== null) {
+      this.finishBracket(lobbyId, bracket, now);
+      return;
+    }
+
+    const nextMatchup = nextUndecidedMatchup(bracket);
+    if (!nextMatchup || nextMatchup.playerB === null) {
+      return;
+    }
+    this.currentMatchupByLobbyId.set(lobbyId, nextMatchup.id);
+    this.beginMatch(lobbyId, buildDuelPlayerOrder(nextMatchup.playerA, nextMatchup.playerB, BRACKET_BEST_OF), "bracket", now);
+  }
+
+  private handleBracketMatchupFinished(lobbyId: LobbyId, match: Match, now: number): void {
+    const matchupId = this.currentMatchupByLobbyId.get(lobbyId);
+    const bracket = this.bracketByLobbyId.get(lobbyId);
+    if (!matchupId || !bracket) {
+      return;
+    }
+    const winnerId = computeDuelStandings(match)[0]?.playerId;
+    if (!winnerId) {
+      return;
+    }
+    this.currentMatchupByLobbyId.delete(lobbyId);
+    this.bracketByLobbyId.set(lobbyId, recordMatchupResult(bracket, matchupId, winnerId));
+    this.advanceBracketFlow(lobbyId, now);
+  }
+
+  private finishBracket(lobbyId: LobbyId, bracket: BracketState, now: number): void {
+    this.bracketByLobbyId.delete(lobbyId);
+    this.currentMatchupByLobbyId.delete(lobbyId);
     const lobby = this.lobbies.get(lobbyId);
     if (!lobby) {
       return;
     }
-    const ticked = evaluateCountdown(lobby, now, this.options.countdownMs);
-    if (ticked !== lobby) {
-      this.lobbies.set(lobbyId, ticked);
-      this.broadcastToLobby(lobbyId, { type: "LOBBY_STATE", lobby: toSnapshot(ticked) });
-      if (ticked.phase === "countdown") {
-        this.broadcastToLobby(lobbyId, { type: "COUNTDOWN_UPDATE", secondsRemaining: Math.ceil((ticked.countdownEndsAt! - now) / 1000) });
-      }
-      if (ticked.phase === "in-progress") {
-        this.startMatchForLobby(ticked, now);
-      }
-    }
+    const standings = computeBracketPlacements(bracket, lobby.players.map((p) => p.id));
+    this.broadcastToLobby(lobbyId, {
+      type: "MATCH_RESULT",
+      standings: standings.map((s) => ({ playerId: s.playerId, rank: s.rank, score: null, wins: null, aggregateTotal: null })),
+    });
+    this.lobbies.set(lobbyId, { ...lobby, phase: "finished", updatedAt: now });
   }
 
-  private startMatchForLobby(lobby: Lobby, now: number): void {
-    const match = createMatch(lobby, now);
-    this.matches.set(match.id, match);
-    this.matchIdByLobbyId.set(lobby.id, match.id);
-    this.broadcastToLobby(lobby.id, { type: "MATCH_STARTED", matchId: match.id, playerOrder: [...match.playerOrder] });
-    this.startRound(match, lobby.id);
-  }
+  // --- Runden ---------------------------------------------------------------
 
   private startRound(match: Match, lobbyId: LobbyId): void {
     const barkerId = currentBarker(match);
@@ -660,20 +875,25 @@ export class GameServer {
       this.broadcastToLobby(lobbyId, { type: "FLAG_BROADCAST", playerId, flags: [...score.flags] });
     }
 
-    if (isMatchFinished(updatedMatch)) {
-      const standings = computeStandings(updatedMatch).map((s) => ({
-        playerId: s.playerId,
-        rank: s.rank,
-        score: s.result ? toWireScore(s.result.score) : null,
-      }));
-      this.broadcastToLobby(lobbyId, { type: "MATCH_RESULT", standings });
-      const lobby = this.lobbies.get(lobbyId);
-      if (lobby) {
-        this.lobbies.set(lobbyId, { ...lobby, phase: "finished", updatedAt: now });
-      }
-      this.roundTimers.delete(updatedMatch.id);
-    } else {
+    if (!isMatchFinished(updatedMatch)) {
       this.startRound(updatedMatch, lobbyId);
+      return;
+    }
+
+    const kind = this.matchKindByMatchId.get(updatedMatch.id) ?? "carousel";
+    this.matchKindByMatchId.delete(updatedMatch.id);
+    this.roundTimers.delete(updatedMatch.id);
+
+    if (kind === "bracket") {
+      this.handleBracketMatchupFinished(lobbyId, updatedMatch, now);
+      return;
+    }
+
+    const standings = computeStandingsForKind(kind, updatedMatch);
+    this.broadcastToLobby(lobbyId, { type: "MATCH_RESULT", standings: standings.map(toWireStanding) });
+    const lobby = this.lobbies.get(lobbyId);
+    if (lobby) {
+      this.lobbies.set(lobbyId, { ...lobby, phase: "finished", updatedAt: now });
     }
   }
 
@@ -690,6 +910,7 @@ export class GameServer {
         this.broadcastToLobby(lobbyId, { type: "PRESENCE_STATUS", playerId: session.playerId, status: "reconnecting" });
       }
     }
+    this.carouselState = dequeueFromCarousel(this.carouselState, session.playerId);
 
     session.disconnectGraceTimer = setTimeout(() => {
       this.finalizeDisconnect(session);
@@ -711,6 +932,8 @@ export class GameServer {
         if (updated.players.length === 0) {
           this.lobbies.delete(lobbyId);
           this.matchIdByLobbyId.delete(lobbyId);
+          this.bracketByLobbyId.delete(lobbyId);
+          this.currentMatchupByLobbyId.delete(lobbyId);
         } else {
           this.lobbies.set(lobbyId, updated);
           this.broadcastToLobby(lobbyId, { type: "LOBBY_STATE", lobby: toSnapshot(updated) });
@@ -730,9 +953,6 @@ export class GameServer {
 
   private tick(): void {
     const now = this.now();
-    for (const lobbyId of [...this.lobbies.keys()]) {
-      this.maybeAdvanceLobby(lobbyId, now);
-    }
     this.garbageCollectIdleLobbies(now);
   }
 
@@ -744,6 +964,8 @@ export class GameServer {
       if (shouldGc) {
         this.lobbies.delete(id);
         this.matchIdByLobbyId.delete(id);
+        this.bracketByLobbyId.delete(id);
+        this.currentMatchupByLobbyId.delete(id);
       }
     }
   }
@@ -795,7 +1017,62 @@ const DEFAULT_AVATAR: AvatarSeed = {
   idleSeed: 1,
 };
 
-function toSnapshot(lobby: Lobby): z.infer<typeof LobbySnapshotSchema> {
+function markConnection(lobby: Lobby, playerId: PlayerId, connected: boolean, now: number): Lobby {
+  return {
+    ...lobby,
+    players: lobby.players.map((p) => (p.id === playerId ? { ...p, connected } : p)),
+    updatedAt: now,
+  };
+}
+
+function computeStandingsForKind(kind: MatchKind, match: Match): Standing[] {
+  switch (kind) {
+    case "duell":
+      return computeDuelStandings(match);
+    case "rudel":
+      return computeAggregateStandings(match);
+    case "carousel":
+    default:
+      return computeStandings(match);
+  }
+}
+
+/**
+ * Platzierung nach K.-o.-Ausscheidung: Champion zuerst, danach nach der
+ * hoechsten erreichten Runde (spaeter ausgeschieden = besserer Platz).
+ */
+function computeBracketPlacements(bracket: BracketState, allPlayerIds: readonly PlayerId[]): { playerId: PlayerId; rank: number }[] {
+  const eliminationRound = new Map<PlayerId, number>();
+  for (const matchup of bracket.matchups) {
+    if (matchup.winnerId === null || matchup.playerB === null) {
+      continue;
+    }
+    const loser = matchup.playerA === matchup.winnerId ? matchup.playerB : matchup.playerA;
+    eliminationRound.set(loser, matchup.round);
+  }
+  const ranked = allPlayerIds
+    .map((playerId) => ({
+      playerId,
+      isChampion: playerId === bracket.champion,
+      round: eliminationRound.get(playerId) ?? 0,
+    }))
+    .sort((a, b) => Number(b.isChampion) - Number(a.isChampion) || b.round - a.round);
+  return ranked.map((entry, index) => ({ playerId: entry.playerId, rank: index + 1 }));
+}
+
+function toSnapshot(lobby: Lobby): {
+  id: string;
+  code: string | null;
+  mode: Lobby["mode"];
+  phase: Lobby["phase"];
+  players: { id: string; nickname: string; avatar: AvatarSeed; connected: boolean; isHost: boolean; joinedAt: number }[];
+  hostId: string | null;
+  maxPlayers: number;
+  minPlayersToStart: number;
+  countdownEndsAt: number | null;
+  matchMode: PrivateMatchMode | null;
+  audioMode: AudioMode;
+} {
   return {
     id: lobby.id,
     code: lobby.code,
@@ -813,11 +1090,23 @@ function toSnapshot(lobby: Lobby): z.infer<typeof LobbySnapshotSchema> {
     maxPlayers: lobby.maxPlayers,
     minPlayersToStart: lobby.minPlayersToStart,
     countdownEndsAt: lobby.countdownEndsAt,
+    matchMode: lobby.matchMode,
+    audioMode: lobby.audioMode,
   };
 }
 
-function toWireScore(score: BarkScore): z.infer<typeof BarkScoreSchema> {
+function toWireScore(score: BarkScore) {
   return { ...score, flags: [...score.flags] };
+}
+
+function toWireStanding(standing: Standing) {
+  return {
+    playerId: standing.playerId,
+    rank: standing.rank,
+    score: standing.result ? toWireScore(standing.result.score) : null,
+    wins: standing.wins,
+    aggregateTotal: standing.aggregateTotal,
+  };
 }
 
 function hashSeed(value: string): number {
@@ -842,6 +1131,10 @@ function lobbyErrorMessage(code: string): string {
       return "Du bist bereits in dieser Lobby.";
     case "NOT_ENOUGH_PLAYERS":
       return "Nicht genug Spieler zum Starten.";
+    case "MATCH_MODE_REQUIRED":
+      return "Der Host muss vorher Kläffduell oder Rudel auswaehlen.";
+    case "INVALID_MAX_PLAYERS":
+      return "Ungueltige Spielerzahl-Grenze.";
     default:
       return "Unbekannter Fehler.";
   }

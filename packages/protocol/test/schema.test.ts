@@ -3,7 +3,7 @@ import { parseClientMessage, parseServerMessage } from "../src/schema.js";
 
 describe("schema", () => {
   it("akzeptiert gueltige Client-Nachrichten", () => {
-    expect(() => parseClientMessage({ type: "QUICKMATCH_JOIN" })).not.toThrow();
+    expect(() => parseClientMessage({ type: "CAROUSEL_JOIN" })).not.toThrow();
     expect(() => parseClientMessage({ type: "EMOTE", emote: "WAU" })).not.toThrow();
     expect(() => parseClientMessage({ type: "LEVEL_UPDATE", level: 42 })).not.toThrow();
   });

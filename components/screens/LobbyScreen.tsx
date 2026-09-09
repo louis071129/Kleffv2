@@ -32,7 +32,7 @@ export function LobbyScreen({ onLeave }: { readonly onLeave: () => void }): Reac
     <main className="mx-auto flex min-h-dvh max-w-md flex-col gap-5 px-5 py-8">
       <header className="flex items-center justify-between">
         <h1 className="font-display text-3xl">
-          {lobby.mode === "public" ? "Schnellsuche" : "Private Lobby"}
+          {lobby.mode === "carousel" ? "Kläffkarussell" : "Private Lobby"}
         </h1>
         <ConnectionDot status={status} />
       </header>
@@ -93,7 +93,6 @@ export function LobbyScreen({ onLeave }: { readonly onLeave: () => void }): Reac
 
       <p className="text-center text-xs text-[var(--muted)]">
         {lobby.players.length}/{lobby.maxPlayers} Spieler
-        {lobby.mode === "public" && ` - ab ${lobby.minPlayersToStart} startet der Countdown`}
       </p>
 
       {lobby.mode === "private" && isHost && (

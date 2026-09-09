@@ -88,6 +88,30 @@ class TestClient {
     });
   }
 
+  /** Wie waitFor, aber fuer zwei moegliche Nachrichtentypen - registriert genau EINEN Waiter statt zwei. */
+  waitForEither<T1 extends ServerMessage["type"], T2 extends ServerMessage["type"]>(
+    type1: T1,
+    type2: T2,
+    timeoutMs = 3000,
+  ): Promise<Extract<ServerMessage, { type: T1 | T2 }>> {
+    const predicate = (m: ServerMessage): m is Extract<ServerMessage, { type: T1 | T2 }> => m.type === type1 || m.type === type2;
+    const index = this.received.findIndex(predicate);
+    if (index >= 0) {
+      const [msg] = this.received.splice(index, 1);
+      return Promise.resolve(msg as Extract<ServerMessage, { type: T1 | T2 }>);
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Timeout beim Warten auf ${type1}/${type2}`)), timeoutMs);
+      this.waiters.push({
+        predicate,
+        resolve: (m) => {
+          clearTimeout(timer);
+          resolve(m as Extract<ServerMessage, { type: T1 | T2 }>);
+        },
+      });
+    });
+  }
+
   close(): void {
     this.ws.close();
   }
@@ -106,7 +130,6 @@ async function createHarness(overrides: ConstructorParameters<typeof GameServer>
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
   const gameServer = new GameServer({
     roundTimeoutMs: 400,
-    countdownMs: 300,
     tickIntervalMs: 30,
     disconnectGraceMs: 300,
     heartbeatIntervalMs: 60_000,
@@ -154,54 +177,325 @@ afterEach(async () => {
   }
 });
 
-describe("GameServer - Integration (echte WebSocket-Clients)", () => {
-  it("fuenf Spieler finden sich ueber die Schnellsuche und spielen ein komplettes Match durch", async () => {
+async function playFullMatch(
+  players: { client: TestClient; playerId: string }[],
+  totalRounds: number,
+): Promise<void> {
+  for (let round = 0; round < totalRounds; round += 1) {
+    const roundStarted = await players[0]!.client.waitFor("ROUND_STARTED", 3000);
+    const barker = players.find((p) => p.playerId === roundStarted.barkerPlayerId);
+    expect(barker).toBeDefined();
+    barker!.client.send({ type: "BARK_SUBMIT", frames: makeFrames(-5) });
+    await players[0]!.client.waitFor("ROUND_RESULT", 3000);
+  }
+}
+
+describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", () => {
+  it("zwei wartende Spieler werden sofort gepaart und spielen eine komplette Begegnung (nie Rohaudio)", async () => {
+    const harness = await createHarness();
+    currentHarness = harness;
+
+    const a = await harness.connect("device-a", "A");
+    const b = await harness.connect("device-b", "B");
+    a.client.send({ type: "CAROUSEL_JOIN" });
+    await a.client.waitFor("CAROUSEL_QUEUED", 2000);
+    b.client.send({ type: "CAROUSEL_JOIN" });
+    await b.client.waitFor("CAROUSEL_QUEUED", 2000);
+
+    const lobbyState = await a.client.waitFor("LOBBY_STATE", 2000);
+    expect(lobbyState.lobby.mode).toBe("carousel");
+    expect(lobbyState.lobby.audioMode).toBe("synth");
+    expect(lobbyState.lobby.players).toHaveLength(2);
+
+    const started = await a.client.waitFor("MATCH_STARTED", 2000);
+    expect(started.totalRounds).toBe(2);
+
+    await playFullMatch([a, b], 2);
+    const result = await a.client.waitFor("MATCH_RESULT", 2000);
+    expect(result.standings).toHaveLength(2);
+    expect(result.standings[0]?.rank).toBe(1);
+  }, 15000);
+
+  it("bei 4 gleichzeitig wartenden Spielern entstehen zwei Paare", async () => {
     const harness = await createHarness();
     currentHarness = harness;
 
     const players = [];
-    for (let i = 0; i < 5; i += 1) {
-      players.push(await harness.connect(`device-${i}`, `Spieler${i}`));
+    for (let i = 0; i < 4; i += 1) {
+      players.push(await harness.connect(`device-q4-${i}`, `P${i}`));
     }
     for (const p of players) {
-      p.client.send({ type: "QUICKMATCH_JOIN" });
+      p.client.send({ type: "CAROUSEL_JOIN" });
     }
-
-    const started = await players[0]!.client.waitFor("MATCH_STARTED", 5000);
-    expect(started.playerOrder).toHaveLength(5);
-
-    for (let round = 0; round < 5; round += 1) {
-      const roundStarted = await players[0]!.client.waitFor("ROUND_STARTED", 3000);
-      const barker = players.find((p) => p.playerId === roundStarted.barkerPlayerId);
-      expect(barker).toBeDefined();
-      barker!.client.send({ type: "BARK_SUBMIT", frames: makeFrames(-5) });
-      await players[0]!.client.waitFor("ROUND_RESULT", 3000);
+    const lobbyIds = new Set<string>();
+    for (const p of players) {
+      const state = await p.client.waitFor("LOBBY_STATE", 2000);
+      lobbyIds.add(state.lobby.id);
     }
+    expect(lobbyIds.size).toBe(2);
+  }, 10000);
 
-    const result = await players[0]!.client.waitFor("MATCH_RESULT", 3000);
-    expect(result.standings).toHaveLength(5);
-    expect(result.standings[0]?.rank).toBe(1);
-  }, 15000);
-
-  it("Nachfuellen bis 6 Spieler resettet den Countdown nicht (Backfill)", async () => {
-    const harness = await createHarness({ countdownMs: 1000 });
+  it("bei 6 gleichzeitig wartenden Spielern entstehen drei Paare", async () => {
+    const harness = await createHarness();
     currentHarness = harness;
 
     const players = [];
-    for (let i = 0; i < 3; i += 1) {
-      const p = await harness.connect(`device-b${i}`, `B${i}`);
-      players.push(p);
-      p.client.send({ type: "QUICKMATCH_JOIN" });
+    for (let i = 0; i < 6; i += 1) {
+      players.push(await harness.connect(`device-q6-${i}`, `P${i}`));
     }
-    const countdownState = await players[0]!.client.waitFor("LOBBY_STATE", 2000);
-    expect(countdownState.lobby.phase === "countdown" || countdownState.lobby.phase === "waiting").toBe(true);
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const fourth = await harness.connect("device-b3", "B3");
-    fourth.client.send({ type: "QUICKMATCH_JOIN" });
-    const afterJoin = await fourth.client.waitFor("LOBBY_STATE", 2000);
-    expect(afterJoin.lobby.players.length).toBeGreaterThanOrEqual(4);
+    for (const p of players) {
+      p.client.send({ type: "CAROUSEL_JOIN" });
+    }
+    const lobbyIds = new Set<string>();
+    for (const p of players) {
+      const state = await p.client.waitFor("LOBBY_STATE", 2000);
+      lobbyIds.add(state.lobby.id);
+    }
+    expect(lobbyIds.size).toBe(3);
   }, 10000);
+
+  it("nach einer Begegnung fuehrt ein erneuter CAROUSEL_JOIN zu einem neuen Gegner (Re-Pairing)", async () => {
+    const harness = await createHarness();
+    currentHarness = harness;
+
+    const a = await harness.connect("device-r1", "A");
+    const b = await harness.connect("device-r2", "B");
+    const c = await harness.connect("device-r3", "C");
+
+    a.client.send({ type: "CAROUSEL_JOIN" });
+    b.client.send({ type: "CAROUSEL_JOIN" });
+    const firstLobby = await a.client.waitFor("LOBBY_STATE", 2000);
+    await playFullMatch([a, b], 2);
+    await a.client.waitFor("MATCH_RESULT", 2000);
+    await b.client.waitFor("MATCH_RESULT", 2000);
+
+    // A sucht sich einen neuen Gegner, C wartet bereits.
+    c.client.send({ type: "CAROUSEL_JOIN" });
+    await c.client.waitFor("CAROUSEL_QUEUED", 2000);
+    a.client.send({ type: "CAROUSEL_JOIN" });
+    const secondLobby = await a.client.waitFor("LOBBY_STATE", 2000);
+
+    expect(secondLobby.lobby.id).not.toBe(firstLobby.lobby.id);
+    expect(secondLobby.lobby.players.map((p) => p.id).sort()).toEqual([a.playerId, c.playerId].sort());
+  }, 15000);
+
+  it("aktives Verlassen (CAROUSEL_LEAVE) entfernt aus der Warteschlange - kein Pairing mehr", async () => {
+    const harness = await createHarness();
+    currentHarness = harness;
+
+    const a = await harness.connect("device-l1", "A");
+    const b = await harness.connect("device-l2", "B");
+    a.client.send({ type: "CAROUSEL_JOIN" });
+    await a.client.waitFor("CAROUSEL_QUEUED", 2000);
+    a.client.send({ type: "CAROUSEL_LEAVE" });
+
+    b.client.send({ type: "CAROUSEL_JOIN" });
+    await b.client.waitFor("CAROUSEL_QUEUED", 2000);
+    // Kein Partner mehr da (A ist raus) - B bekommt kein LOBBY_STATE.
+    await expect(b.client.waitFor("LOBBY_STATE", 500)).rejects.toThrow();
+  }, 10000);
+
+  it("Feature-Frames werden waehrend des Bellfensters live an den Gegner relayed (Grundlage fuer den Bark-Synth)", async () => {
+    const harness = await createHarness();
+    currentHarness = harness;
+
+    const a = await harness.connect("device-f1", "A");
+    const b = await harness.connect("device-f2", "B");
+    a.client.send({ type: "CAROUSEL_JOIN" });
+    b.client.send({ type: "CAROUSEL_JOIN" });
+    const roundStarted = await a.client.waitFor("ROUND_STARTED", 2000);
+    const barker = roundStarted.barkerPlayerId === a.playerId ? a : b;
+    const listener = barker === a ? b : a;
+
+    const liveFrame = { t: 20, peakDbfs: -12, rmsDbfs: -18, centroidHz: 1300, flatness: 0.4, clipped: false };
+    barker.client.send({ type: "BARK_FRAME", frame: liveFrame });
+    const broadcast = await listener.client.waitFor("BARK_FRAME_BROADCAST", 2000);
+    expect(broadcast.playerId).toBe(barker.playerId);
+    expect(broadcast.frame).toEqual(liveFrame);
+  }, 10000);
+
+  it("Melde-Schwelle: ab 3 Meldungen aus verschiedenen Lobbys wird das Kläffkarussell gesperrt", async () => {
+    const harness = await createHarness();
+    currentHarness = harness;
+
+    const target = await harness.connect("device-reported", "Zielspieler");
+
+    for (let i = 0; i < 3; i += 1) {
+      const reporter = await harness.connect(`device-reporter-${i}`, `Melder${i}`);
+      reporter.client.send({ type: "LOBBY_CREATE" });
+      await reporter.client.waitFor("LOBBY_STATE");
+      reporter.client.send({ type: "REPORT_PLAYER", targetPlayerId: target.playerId });
+      await reporter.client.waitFor("REPORT_ACK", 2000);
+    }
+
+    target.client.send({ type: "CAROUSEL_JOIN" });
+    const error = await target.client.waitFor("ERROR", 2000);
+    expect(error.code).toBe("CAROUSEL_EXCLUDED");
+  }, 10000);
+});
+
+describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", () => {
+  it("2 Spieler: automatisch Duell-Modus, echter Ton per Default, Standings nach Rundensiegen", async () => {
+    const harness = await createHarness();
+    currentHarness = harness;
+
+    const host = await harness.connect("device-d1", "Host");
+    const guest = await harness.connect("device-d2", "Gast");
+    host.client.send({ type: "LOBBY_CREATE" });
+    const hostLobby = await host.client.waitFor("LOBBY_STATE");
+    expect(hostLobby.lobby.audioMode).toBe("real");
+    guest.client.send({ type: "LOBBY_JOIN", code: hostLobby.lobby.code! });
+    await guest.client.waitFor("LOBBY_STATE");
+    await host.client.waitFor("LOBBY_STATE"); // Join-Broadcast auch beim Host abraeumen
+
+    host.client.send({ type: "LOBBY_START" });
+    const started = await host.client.waitFor("LOBBY_STATE", 2000);
+    expect(started.lobby.matchMode).toBe("duell");
+    const matchStarted = await host.client.waitFor("MATCH_STARTED", 2000);
+    expect(matchStarted.totalRounds).toBe(10); // Best-of-5 = 5 Zyklen a 2 Spieler
+
+    // Host immer lauter als Gast, damit jeder Zyklus eindeutig entschieden wird
+    // (identische Frames wuerden sonst zu einem 0:0-Unentschieden fuehren).
+    const players = { [host.playerId]: host, [guest.playerId]: guest };
+    for (let round = 0; round < 10; round += 1) {
+      const roundStarted = await host.client.waitFor("ROUND_STARTED", 3000);
+      const barker = players[roundStarted.barkerPlayerId]!;
+      const peak = barker === host ? -3 : -30;
+      barker.client.send({ type: "BARK_SUBMIT", frames: makeFrames(peak) });
+      await host.client.waitFor("ROUND_RESULT", 3000);
+    }
+    const result = await host.client.waitFor("MATCH_RESULT", 2000);
+    expect(result.standings).toHaveLength(2);
+    expect(result.standings[0]?.playerId).toBe(host.playerId);
+    expect(result.standings[0]?.wins).toBe(5);
+    expect(result.standings[1]?.wins).toBe(0);
+  }, 15000);
+
+  it("Echter Ton: eine gesendete Audio-Aufnahme wird an den Mitspieler relayed", async () => {
+    const harness = await createHarness();
+    currentHarness = harness;
+
+    const host = await harness.connect("device-a1", "Host");
+    const guest = await harness.connect("device-a2", "Gast");
+    host.client.send({ type: "LOBBY_CREATE" });
+    const hostLobby = await host.client.waitFor("LOBBY_STATE");
+    guest.client.send({ type: "LOBBY_JOIN", code: hostLobby.lobby.code! });
+    await guest.client.waitFor("LOBBY_STATE");
+
+    host.client.send({
+      type: "AUDIO_BLOB_SUBMIT",
+      roundIndex: 0,
+      mimeType: "audio/webm;codecs=opus",
+      dataBase64: "ZmFrZS1hdWRpby1kYXRh",
+    });
+    const broadcast = await guest.client.waitFor("AUDIO_BLOB_BROADCAST", 2000);
+    expect(broadcast.playerId).toBe(host.playerId);
+    expect(broadcast.mimeType).toBe("audio/webm;codecs=opus");
+    expect(broadcast.dataBase64).toBe("ZmFrZS1hdWRpby1kYXRh");
+  }, 10000);
+
+  it("Host kann 'Echter Ton' abschalten - danach kein Audio-Blob-Relay mehr", async () => {
+    const harness = await createHarness();
+    currentHarness = harness;
+
+    const host = await harness.connect("device-a3", "Host");
+    const guest = await harness.connect("device-a4", "Gast");
+    host.client.send({ type: "LOBBY_CREATE" });
+    const hostLobby = await host.client.waitFor("LOBBY_STATE");
+    guest.client.send({ type: "LOBBY_JOIN", code: hostLobby.lobby.code! });
+    await guest.client.waitFor("LOBBY_STATE");
+    await host.client.waitFor("LOBBY_STATE"); // Join-Broadcast auch beim Host abraeumen
+
+    host.client.send({ type: "LOBBY_SET_AUDIO_MODE", audioMode: "synth" });
+    const updated = await host.client.waitFor("LOBBY_STATE", 2000);
+    expect(updated.lobby.audioMode).toBe("synth");
+
+    host.client.send({ type: "AUDIO_BLOB_SUBMIT", roundIndex: 0, mimeType: "audio/webm", dataBase64: "eA==" });
+    await expect(guest.client.waitFor("AUDIO_BLOB_BROADCAST", 500)).rejects.toThrow();
+  }, 10000);
+
+  it("ab 3 Spielern verlangt LOBBY_START vorher einen gewaehlten Modus (Rudel/Kläffduell)", async () => {
+    const harness = await createHarness();
+    currentHarness = harness;
+
+    const host = await harness.connect("device-m1", "Host");
+    const p2 = await harness.connect("device-m2", "P2");
+    const p3 = await harness.connect("device-m3", "P3");
+    host.client.send({ type: "LOBBY_CREATE" });
+    const hostLobby = await host.client.waitFor("LOBBY_STATE");
+    p2.client.send({ type: "LOBBY_JOIN", code: hostLobby.lobby.code! });
+    await p2.client.waitFor("LOBBY_STATE");
+    p3.client.send({ type: "LOBBY_JOIN", code: hostLobby.lobby.code! });
+    await p3.client.waitFor("LOBBY_STATE");
+
+    host.client.send({ type: "LOBBY_START" });
+    const error = await host.client.waitFor("ERROR", 2000);
+    expect(error.code).toBe("MATCH_MODE_REQUIRED");
+  }, 10000);
+
+  it("Rudel (3 Spieler): rankt nach Summe ueber 3 Zyklen (9 Runden)", async () => {
+    const harness = await createHarness();
+    currentHarness = harness;
+
+    const host = await harness.connect("device-ru1", "Host");
+    const p2 = await harness.connect("device-ru2", "P2");
+    const p3 = await harness.connect("device-ru3", "P3");
+    host.client.send({ type: "LOBBY_CREATE" });
+    const hostLobby = await host.client.waitFor("LOBBY_STATE");
+    p2.client.send({ type: "LOBBY_JOIN", code: hostLobby.lobby.code! });
+    await p2.client.waitFor("LOBBY_STATE");
+    p3.client.send({ type: "LOBBY_JOIN", code: hostLobby.lobby.code! });
+    await p3.client.waitFor("LOBBY_STATE");
+
+    host.client.send({ type: "LOBBY_SET_MATCH_MODE", matchMode: "rudel" });
+    await host.client.waitFor("LOBBY_STATE", 2000);
+    host.client.send({ type: "LOBBY_START" });
+    const matchStarted = await host.client.waitFor("MATCH_STARTED", 2000);
+    expect(matchStarted.totalRounds).toBe(9);
+
+    await playFullMatch([host, p2, p3], 9);
+    const result = await host.client.waitFor("MATCH_RESULT", 2000);
+    expect(result.standings).toHaveLength(3);
+    expect(result.standings[0]?.aggregateTotal).not.toBeNull();
+  }, 20000);
+
+  it("Kläffduell (Bracket, 3 Spieler): laeuft bis zu einem Champion durch", async () => {
+    const harness = await createHarness();
+    currentHarness = harness;
+
+    const host = await harness.connect("device-br1", "Host");
+    const p2 = await harness.connect("device-br2", "P2");
+    const p3 = await harness.connect("device-br3", "P3");
+    host.client.send({ type: "LOBBY_CREATE" });
+    const hostLobby = await host.client.waitFor("LOBBY_STATE");
+    p2.client.send({ type: "LOBBY_JOIN", code: hostLobby.lobby.code! });
+    await p2.client.waitFor("LOBBY_STATE");
+    p3.client.send({ type: "LOBBY_JOIN", code: hostLobby.lobby.code! });
+    await p3.client.waitFor("LOBBY_STATE");
+
+    host.client.send({ type: "LOBBY_SET_MATCH_MODE", matchMode: "bracket" });
+    await host.client.waitFor("LOBBY_STATE", 2000);
+    host.client.send({ type: "LOBBY_START" });
+
+    const players = [host, p2, p3];
+    let finalResult: Extract<ServerMessage, { type: "MATCH_RESULT" }> | null = null;
+    // 3 Spieler, Best-of-3 pro Matchup: Runde 1 (1 Freilos + 1 Matchup a 6
+    // Baellen) + Finale (1 Matchup a 6 Baellen) = maximal 12 Baelle - 20 ist
+    // grosszuegig, damit ein echter Fehler den Test timeout-faellt statt
+    // endlos laeuft.
+    for (let safety = 0; safety < 20 && !finalResult; safety += 1) {
+      const next = await host.client.waitForEither("ROUND_STARTED", "MATCH_RESULT", 3000);
+      if (next.type === "MATCH_RESULT") {
+        finalResult = next;
+        break;
+      }
+      const barker = players.find((p) => p.playerId === next.barkerPlayerId)!;
+      barker.client.send({ type: "BARK_SUBMIT", frames: makeFrames(-5) });
+      await host.client.waitFor("ROUND_RESULT", 3000);
+    }
+    expect(finalResult).not.toBeNull();
+    expect(finalResult!.standings.find((s) => s.rank === 1)).toBeDefined();
+  }, 20000);
 
   it("Disconnect mitten in der Runde, dann Reconnect mit Sitzung", async () => {
     const harness = await createHarness({ roundTimeoutMs: 3000, disconnectGraceMs: 1500 });
@@ -295,24 +589,5 @@ describe("GameServer - Integration (echte WebSocket-Clients)", () => {
     await client.waitFor("WELCOME");
     const rejected = await client.waitFor("NICKNAME_REJECTED", 2000);
     expect(rejected.fallbackNickname).not.toMatch(/hurensohn/iu);
-  }, 10000);
-
-  it("Melde-Schwelle: ab 3 Meldungen aus verschiedenen Lobbys wird die Schnellsuche gesperrt", async () => {
-    const harness = await createHarness();
-    currentHarness = harness;
-
-    const target = await harness.connect("device-reported", "Zielspieler");
-
-    for (let i = 0; i < 3; i += 1) {
-      const reporter = await harness.connect(`device-reporter-${i}`, `Melder${i}`);
-      reporter.client.send({ type: "LOBBY_CREATE" });
-      await reporter.client.waitFor("LOBBY_STATE");
-      reporter.client.send({ type: "REPORT_PLAYER", targetPlayerId: target.playerId });
-      await reporter.client.waitFor("REPORT_ACK", 2000);
-    }
-
-    target.client.send({ type: "QUICKMATCH_JOIN" });
-    const error = await target.client.waitFor("ERROR", 2000);
-    expect(error.code).toBe("PUBLIC_QUEUE_EXCLUDED");
   }, 10000);
 });

@@ -20,8 +20,12 @@ export interface AvatarSeed {
   readonly idleSeed: number;
 }
 
-export type LobbyMode = "public" | "private";
+export type LobbyMode = "carousel" | "private";
 export type LobbyPhase = "waiting" | "countdown" | "in-progress" | "finished";
+/** Wahl des Hosts ab 3 Spielern in einer privaten Lobby (bei genau 2 immer automatisch "duell"). */
+export type PrivateMatchMode = "duell" | "bracket" | "rudel";
+/** "real" = unveraenderter Ton (privater Lobby-Standard), "synth" = Bark-Synth statt echter Stimme. */
+export type AudioMode = "synth" | "real";
 
 export interface Player {
   readonly id: PlayerId;
@@ -43,6 +47,10 @@ export interface Lobby {
   readonly maxPlayers: number;
   readonly minPlayersToStart: number;
   readonly countdownEndsAt: number | null;
+  /** Nur "private": null bis der Host waehlt (Pflicht ab 3 Spielern, bei 2 automatisch "duell"). */
+  readonly matchMode: PrivateMatchMode | null;
+  /** "real" = echter Ton (Standard bei "private"), "carousel" ist immer "synth". */
+  readonly audioMode: AudioMode;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -68,7 +76,12 @@ export interface Match {
 export interface Standing {
   readonly playerId: PlayerId;
   readonly rank: number;
+  /** Repraesentatives Einzelergebnis (fuer Breakdown-Anzeige) - bei Rudel das beste der Runden. */
   readonly result: RoundResult | null;
+  /** Rundensiege bei Duell/Kläffduell (Best-of-N), sonst null. */
+  readonly wins: number | null;
+  /** Summe der Einzel-Scores bei Rudel (mehrere Runden pro Spieler), sonst null. */
+  readonly aggregateTotal: number | null;
 }
 
 export type PublicFlagLabel = AntiCheatFlag;

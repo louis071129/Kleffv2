@@ -58,10 +58,10 @@ export function GameApp({ initialCode }: { readonly initialCode?: string }): Rea
     });
   }
 
-  function startFlow(mode: "quickmatch" | "create" | "join", code?: string): void {
+  function startFlow(mode: "carousel" | "create" | "join", code?: string): void {
     const action: ClientMessage =
-      mode === "quickmatch"
-        ? { type: "QUICKMATCH_JOIN" }
+      mode === "carousel"
+        ? { type: "CAROUSEL_JOIN" }
         : mode === "create"
           ? { type: "LOBBY_CREATE" }
           : { type: "LOBBY_JOIN", code: (code ?? "").toUpperCase() };

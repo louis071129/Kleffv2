@@ -47,6 +47,17 @@ export const BarkScoreSchema = z.object({
   activeDurationMs: z.number(),
 });
 
+export const StandingSchema = z.object({
+  playerId: z.string(),
+  rank: z.number(),
+  /** Repraesentatives Einzelergebnis (Karussell: die eine Runde, Duell/Rudel: eine Beispielrunde fuer die Breakdown-Anzeige). */
+  score: BarkScoreSchema.nullable(),
+  /** Rundensiege bei Duell/Kläffduell (Best-of-N), sonst null. */
+  wins: z.number().int().nullable(),
+  /** Summe der Einzel-Scores bei Rudel, sonst null. */
+  aggregateTotal: z.number().nullable(),
+});
+
 export const EmoteSchema = z.enum([
   "WAU",
   "KNURR",
@@ -67,16 +78,29 @@ export const PlayerSchema = z.object({
   joinedAt: z.number(),
 });
 
+export const PrivateMatchModeSchema = z.enum(["duell", "bracket", "rudel"]);
+export const AudioModeSchema = z.enum(["synth", "real"]);
+
 export const LobbySnapshotSchema = z.object({
   id: z.string(),
   code: z.string().nullable(),
-  mode: z.enum(["public", "private"]),
+  mode: z.enum(["carousel", "private"]),
   phase: z.enum(["waiting", "countdown", "in-progress", "finished"]),
   players: z.array(PlayerSchema),
   hostId: z.string().nullable(),
   maxPlayers: z.number().int(),
   minPlayersToStart: z.number().int(),
   countdownEndsAt: z.number().nullable(),
+  matchMode: PrivateMatchModeSchema.nullable(),
+  audioMode: AudioModeSchema,
+});
+
+export const BracketMatchupSchema = z.object({
+  id: z.string(),
+  round: z.number().int(),
+  playerA: z.string(),
+  playerB: z.string().nullable(),
+  winnerId: z.string().nullable(),
 });
 
 // --- Client -> Server ---
@@ -90,16 +114,32 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("SET_NICKNAME"), nickname: z.string().min(1).max(40) }),
   z.object({ type: z.literal("SET_AVATAR"), avatar: AvatarSeedSchema }),
-  z.object({ type: z.literal("QUICKMATCH_JOIN") }),
-  z.object({ type: z.literal("QUICKMATCH_LEAVE") }),
+  z.object({ type: z.literal("CAROUSEL_JOIN") }),
+  z.object({ type: z.literal("CAROUSEL_LEAVE") }),
   z.object({ type: z.literal("LOBBY_CREATE") }),
   z.object({ type: z.literal("LOBBY_JOIN"), code: z.string().length(6) }),
   z.object({ type: z.literal("LOBBY_LEAVE") }),
   z.object({ type: z.literal("LOBBY_KICK"), targetPlayerId: z.string() }),
+  z.object({ type: z.literal("LOBBY_SET_MAX_PLAYERS"), maxPlayers: z.number().int().min(2).max(8) }),
+  z.object({ type: z.literal("LOBBY_SET_MATCH_MODE"), matchMode: PrivateMatchModeSchema }),
+  z.object({ type: z.literal("LOBBY_SET_AUDIO_MODE"), audioMode: AudioModeSchema }),
   z.object({ type: z.literal("LOBBY_START") }),
   z.object({ type: z.literal("LEVEL_UPDATE"), level: z.number().min(0).max(100) }),
   z.object({ type: z.literal("CALIBRATION_SUBMIT"), profile: CalibrationProfileSchema }),
   z.object({ type: z.literal("BARK_SUBMIT"), frames: z.array(AudioFrameSchema).min(1).max(200) }),
+  // Live-Streaming waehrend des Bellfensters (nicht erst am Ende), fuer den
+  // Bark-Synth beim Gegner im Kläffkarussell - siehe Auftrag. Nie Rohaudio.
+  z.object({ type: z.literal("BARK_FRAME"), frame: AudioFrameSchema }),
+  // Echter Ton in privaten Lobbys: komprimierte Aufnahme des Bellfensters,
+  // Base64-kodiert innerhalb der JSON-Nachricht (kein Binaer-WS-Rahmen noetig
+  // fuer die kurzen ~3s-Fenster). Server haelt das nur in-memory, siehe
+  // server/game-server.ts.
+  z.object({
+    type: z.literal("AUDIO_BLOB_SUBMIT"),
+    roundIndex: z.number().int(),
+    mimeType: z.string().min(1).max(100),
+    dataBase64: z.string().min(1).max(2_000_000),
+  }),
   z.object({ type: z.literal("EMOTE"), emote: EmoteSchema }),
   z.object({ type: z.literal("REPORT_PLAYER"), targetPlayerId: z.string() }),
   z.object({ type: z.literal("HEARTBEAT_PONG") }),
@@ -114,12 +154,27 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("WELCOME"), playerId: z.string(), sessionToken: z.string() }),
   z.object({ type: z.literal("NICKNAME_ACCEPTED"), nickname: z.string() }),
   z.object({ type: z.literal("NICKNAME_REJECTED"), fallbackNickname: z.string() }),
-  z.object({ type: z.literal("QUICKMATCH_QUEUED"), lobbyId: z.string() }),
+  z.object({ type: z.literal("CAROUSEL_QUEUED") }),
   z.object({ type: z.literal("LOBBY_STATE"), lobby: LobbySnapshotSchema }),
   z.object({ type: z.literal("COUNTDOWN_UPDATE"), secondsRemaining: z.number() }),
-  z.object({ type: z.literal("MATCH_STARTED"), matchId: z.string(), playerOrder: z.array(z.string()) }),
+  z.object({
+    type: z.literal("MATCH_STARTED"),
+    matchId: z.string(),
+    playerOrder: z.array(z.string()),
+    totalRounds: z.number().int(),
+  }),
   z.object({ type: z.literal("ROUND_STARTED"), roundIndex: z.number(), barkerPlayerId: z.string(), windowMs: z.number() }),
   z.object({ type: z.literal("LEVEL_BROADCAST"), playerId: z.string(), level: z.number() }),
+  // Live-Relay der Feature-Frames waehrend des Bellfensters (Kläffkarussell:
+  // treibt den Bark-Synth beim Gegner). Nie Rohaudio.
+  z.object({ type: z.literal("BARK_FRAME_BROADCAST"), playerId: z.string(), frame: AudioFrameSchema }),
+  z.object({
+    type: z.literal("AUDIO_BLOB_BROADCAST"),
+    playerId: z.string(),
+    roundIndex: z.number().int(),
+    mimeType: z.string(),
+    dataBase64: z.string(),
+  }),
   z.object({
     type: z.literal("ROUND_RESULT"),
     roundIndex: z.number(),
@@ -128,8 +183,9 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("MATCH_RESULT"),
-    standings: z.array(z.object({ playerId: z.string(), rank: z.number(), score: BarkScoreSchema.nullable() })),
+    standings: z.array(StandingSchema),
   }),
+  z.object({ type: z.literal("BRACKET_STATE"), matchups: z.array(BracketMatchupSchema), champion: z.string().nullable() }),
   z.object({ type: z.literal("EMOTE_BROADCAST"), playerId: z.string(), emote: EmoteSchema }),
   z.object({ type: z.literal("FLAG_BROADCAST"), playerId: z.string(), flags: z.array(AntiCheatFlagSchema) }),
   z.object({ type: z.literal("REPORT_ACK") }),

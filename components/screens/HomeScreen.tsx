@@ -11,7 +11,7 @@ import { randomAvatarSeed } from "../../lib/storage";
 
 export interface HomeScreenProps {
   readonly initialCode?: string;
-  readonly onStart: (mode: "quickmatch" | "create" | "join", code?: string) => void;
+  readonly onStart: (mode: "carousel" | "create" | "join", code?: string) => void;
 }
 
 export function HomeScreen({ initialCode, onStart }: HomeScreenProps): React.ReactElement {
@@ -56,8 +56,8 @@ export function HomeScreen({ initialCode, onStart }: HomeScreenProps): React.Rea
       </Card>
 
       <div className="flex w-full flex-col gap-3">
-        <Button type="button" variant="lime" className="w-full text-lg" onClick={() => onStart("quickmatch")}>
-          🔀 Schnellsuche
+        <Button type="button" variant="lime" className="w-full text-lg" onClick={() => onStart("carousel")}>
+          🎠 Kläffkarussell
         </Button>
         <Button type="button" variant="violet" className="w-full" onClick={() => onStart("create")}>
           🔒 Private Lobby erstellen
@@ -84,8 +84,9 @@ export function HomeScreen({ initialCode, onStart }: HomeScreenProps): React.Rea
       </Card>
 
       <p className="text-center text-xs text-[var(--muted)]">
-        Übertragen wird nur dein Lautstärkepegel, niemals Ton. Kein Freitext-Chat - nur ein
-        Emote-Rad.
+        Im Kläffkarussell hört niemand deine echte Stimme - nur ein computergenerierter
+        Bell-Sound. In privaten Lobbys läuft standardmäßig echter Ton, abschaltbar vom Host.
+        Kein Freitext-Chat - nur ein Emote-Rad.
       </p>
       <LegalFooter />
       <CookieNotice />

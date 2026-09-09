@@ -1,10 +1,9 @@
 import { generateLobbyCode } from "./lobby-code.js";
-import type { Lobby, Player, PlayerId } from "./types.js";
+import type { AudioMode, Lobby, Player, PlayerId, PrivateMatchMode } from "./types.js";
 
-export const PUBLIC_MAX_PLAYERS = 6;
-export const PUBLIC_MIN_TO_START = 3;
-export const PUBLIC_COUNTDOWN_MS = 20_000;
+export const CAROUSEL_PLAYERS = 2;
 export const PRIVATE_MAX_PLAYERS = 8;
+export const PRIVATE_MIN_PLAYERS = 2;
 export const PRIVATE_MIN_TO_START = 2;
 
 export type LobbyErrorCode =
@@ -13,7 +12,9 @@ export type LobbyErrorCode =
   | "NOT_HOST"
   | "PLAYER_NOT_FOUND"
   | "ALREADY_JOINED"
-  | "NOT_ENOUGH_PLAYERS";
+  | "NOT_ENOUGH_PLAYERS"
+  | "MATCH_MODE_REQUIRED"
+  | "INVALID_MAX_PLAYERS";
 
 export class LobbyError extends Error {
   constructor(public readonly code: LobbyErrorCode) {
@@ -26,17 +27,28 @@ function nextId(prefix: string, rand: () => number): string {
   return `${prefix}_${Math.floor(rand() * 1e12).toString(36)}`;
 }
 
-export function createPublicLobby(now: number, rand: () => number = Math.random): Lobby {
+/**
+ * Erzeugt eine bereits vollstaendig gepaarte Kläffkarussell-Begegnung aus
+ * genau zwei Spielern (kommen fertig aus der Warteschlange, siehe
+ * carousel.ts) - kein Warten, kein Countdown, startet direkt "in-progress".
+ * Immer Bark-Synth statt echter Stimme (harte Regel, siehe Auftrag).
+ */
+export function createCarouselLobby(a: Player, b: Player, now: number, rand: () => number = Math.random): Lobby {
   return {
     id: nextId("lobby", rand),
     code: null,
-    mode: "public",
-    phase: "waiting",
-    players: [],
+    mode: "carousel",
+    phase: "in-progress",
+    players: [
+      { ...a, isHost: false },
+      { ...b, isHost: false },
+    ],
     hostId: null,
-    maxPlayers: PUBLIC_MAX_PLAYERS,
-    minPlayersToStart: PUBLIC_MIN_TO_START,
+    maxPlayers: CAROUSEL_PLAYERS,
+    minPlayersToStart: CAROUSEL_PLAYERS,
     countdownEndsAt: null,
+    matchMode: null,
+    audioMode: "synth",
     createdAt: now,
     updatedAt: now,
   };
@@ -53,6 +65,9 @@ export function createPrivateLobby(host: Player, now: number, rand: () => number
     maxPlayers: PRIVATE_MAX_PLAYERS,
     minPlayersToStart: PRIVATE_MIN_TO_START,
     countdownEndsAt: null,
+    matchMode: null,
+    // "Echter Ton" ist der Standard in privaten Lobbys, siehe Auftrag.
+    audioMode: "real",
     createdAt: now,
     updatedAt: now,
   };
@@ -63,18 +78,12 @@ export function hasRoom(lobby: Lobby): boolean {
 }
 
 export function isJoinable(lobby: Lobby): boolean {
-  return (lobby.phase === "waiting" || lobby.phase === "countdown") && hasRoom(lobby);
+  return lobby.phase === "waiting" && hasRoom(lobby);
 }
 
-/**
- * Fuegt einen Spieler hinzu. Bei Public-Lobbys wird der Countdown NICHT
- * zurueckgesetzt, wenn waehrend "countdown" nachgefuellt wird - nur neu
- * gestartet, wenn vorher noch "waiting" war und jetzt die Mindestzahl
- * erreicht wird (siehe evaluateCountdown).
- */
 export function addPlayer(lobby: Lobby, player: Player, now: number): Lobby {
   if (!isJoinable(lobby)) {
-    throw new LobbyError(lobby.phase !== "waiting" && lobby.phase !== "countdown" ? "LOBBY_NOT_WAITING" : "LOBBY_FULL");
+    throw new LobbyError(lobby.phase !== "waiting" ? "LOBBY_NOT_WAITING" : "LOBBY_FULL");
   }
   if (lobby.players.some((p) => p.id === player.id)) {
     throw new LobbyError("ALREADY_JOINED");
@@ -103,15 +112,10 @@ export function removePlayer(lobby: Lobby, playerId: PlayerId, now: number): Lob
     hostId = null;
   }
 
-  const shouldResetCountdown =
-    lobby.mode === "public" && lobby.phase === "countdown" && players.length < lobby.minPlayersToStart;
-
   return {
     ...lobby,
     players,
     hostId,
-    phase: shouldResetCountdown ? "waiting" : lobby.phase,
-    countdownEndsAt: shouldResetCountdown ? null : lobby.countdownEndsAt,
     updatedAt: now,
   };
 }
@@ -129,42 +133,65 @@ export function kickPlayer(lobby: Lobby, requesterId: PlayerId, targetId: Player
   return removePlayer(lobby, targetId, now);
 }
 
-/**
- * Reine "Tick"-Funktion fuer Public-Lobbys: startet den 20s-Countdown sobald
- * genug Spieler da sind, und startet das Match wenn der Countdown ablaeuft
- * (sofern immer noch genug Spieler da sind - sonst zurueck auf "waiting").
- */
-export function evaluateCountdown(lobby: Lobby, now: number, countdownMs: number = PUBLIC_COUNTDOWN_MS): Lobby {
-  if (lobby.mode !== "public") {
-    return lobby;
+/** Host-Einstellung: Spielerzahl-Limit 2..8, nur waehrend "waiting", nie unter die aktuelle Spielerzahl. */
+export function setMaxPlayers(lobby: Lobby, requesterId: PlayerId, maxPlayers: number, now: number): Lobby {
+  if (lobby.mode !== "private" || lobby.hostId !== requesterId) {
+    throw new LobbyError("NOT_HOST");
   }
-
-  if (lobby.phase === "waiting" && lobby.players.length >= lobby.minPlayersToStart) {
-    return { ...lobby, phase: "countdown", countdownEndsAt: now + countdownMs, updatedAt: now };
+  if (lobby.phase !== "waiting") {
+    throw new LobbyError("LOBBY_NOT_WAITING");
   }
-
-  if (lobby.phase === "countdown" && lobby.countdownEndsAt !== null && now >= lobby.countdownEndsAt) {
-    if (lobby.players.length >= lobby.minPlayersToStart) {
-      return { ...lobby, phase: "in-progress", countdownEndsAt: null, updatedAt: now };
-    }
-    return { ...lobby, phase: "waiting", countdownEndsAt: null, updatedAt: now };
+  if (!Number.isInteger(maxPlayers) || maxPlayers < PRIVATE_MIN_PLAYERS || maxPlayers > PRIVATE_MAX_PLAYERS) {
+    throw new LobbyError("INVALID_MAX_PLAYERS");
   }
-
-  return lobby;
+  if (maxPlayers < lobby.players.length) {
+    throw new LobbyError("INVALID_MAX_PLAYERS");
+  }
+  return { ...lobby, maxPlayers, updatedAt: now };
 }
 
-/** Manueller Start durch den Host einer privaten Lobby. */
+/** Host-Einstellung: Kläffduell (Bracket) oder Rudel, relevant ab 3 Spielern (bei 2 immer automatisch Duell). */
+export function setMatchMode(lobby: Lobby, requesterId: PlayerId, matchMode: PrivateMatchMode, now: number): Lobby {
+  if (lobby.mode !== "private" || lobby.hostId !== requesterId) {
+    throw new LobbyError("NOT_HOST");
+  }
+  if (lobby.phase !== "waiting") {
+    throw new LobbyError("LOBBY_NOT_WAITING");
+  }
+  return { ...lobby, matchMode, updatedAt: now };
+}
+
+/** Host-Einstellung: "Echter Ton" (Standard) an-/abschalten, siehe Auftrag. */
+export function setAudioMode(lobby: Lobby, requesterId: PlayerId, audioMode: AudioMode, now: number): Lobby {
+  if (lobby.mode !== "private" || lobby.hostId !== requesterId) {
+    throw new LobbyError("NOT_HOST");
+  }
+  if (lobby.phase !== "waiting") {
+    throw new LobbyError("LOBBY_NOT_WAITING");
+  }
+  return { ...lobby, audioMode, updatedAt: now };
+}
+
+/**
+ * Manueller Start durch den Host einer privaten Lobby. Bei genau 2 Spielern
+ * ist der Modus immer "duell" (kein Bracket noetig), ab 3 Spielern muss der
+ * Host vorher per setMatchMode gewaehlt haben.
+ */
 export function startPrivateLobby(lobby: Lobby, requesterId: PlayerId, now: number): Lobby {
   if (lobby.mode !== "private" || lobby.hostId !== requesterId) {
     throw new LobbyError("NOT_HOST");
   }
-  if (lobby.phase !== "waiting" && lobby.phase !== "countdown") {
+  if (lobby.phase !== "waiting") {
     throw new LobbyError("LOBBY_NOT_WAITING");
   }
   if (lobby.players.length < lobby.minPlayersToStart) {
     throw new LobbyError("NOT_ENOUGH_PLAYERS");
   }
-  return { ...lobby, phase: "in-progress", countdownEndsAt: null, updatedAt: now };
+  const matchMode: PrivateMatchMode | null = lobby.players.length === 2 ? "duell" : lobby.matchMode;
+  if (matchMode === null) {
+    throw new LobbyError("MATCH_MODE_REQUIRED");
+  }
+  return { ...lobby, phase: "in-progress", matchMode, countdownEndsAt: null, updatedAt: now };
 }
 
 export function findPlayer(lobby: Lobby, playerId: PlayerId): Player | undefined {
