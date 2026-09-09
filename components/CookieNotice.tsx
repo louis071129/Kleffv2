@@ -10,6 +10,13 @@ import { dismissCookieNotice, isCookieNoticeDismissed } from "../lib/storage";
  * vorschreibt. Es gibt daher bewusst keinen "Ablehnen"-Button, der etwas
  * abschalten koennte, das ohnehin noetig ist - stattdessen Transparenz plus
  * Link zu den Details/zur Loeschmoeglichkeit.
+ *
+ * Bewusst NICHT `position:fixed`: ein fixiertes Element ignoriert jedes
+ * Padding im Dokumentfluss und legt sich auf dem kurzen iPhone-Viewport
+ * ueber den "Los"-Button beim Code-Beitritt (echter Bug, per Screenshot
+ * gefunden - siehe BLOCKERS.md, derselbe Fehler wie beim BELL!-Button
+ * vorher, nur diesmal auf HomeScreen statt MatchScreen). Als normales
+ * Element am Ende des Seiteninhalts kann es nie etwas darueber verdecken.
  */
 export function CookieNotice(): React.ReactElement | null {
   const [visible, setVisible] = useState(false);
@@ -26,7 +33,7 @@ export function CookieNotice(): React.ReactElement | null {
     <div
       role="dialog"
       aria-label="Hinweis zu Cookies"
-      className="klaeff-card fixed inset-x-3 bottom-3 z-50 mx-auto flex max-w-md flex-col gap-2 p-4 text-xs sm:text-sm"
+      className="klaeff-card flex w-full max-w-md flex-col gap-2 p-4 text-xs sm:text-sm"
       style={{ ["--card-shadow-color" as string]: "var(--ink)" }}
     >
       <p>

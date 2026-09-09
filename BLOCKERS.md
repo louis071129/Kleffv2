@@ -219,6 +219,23 @@ Entscheidung: bestehende, korrekte 35/27.5/22.5/15-Verteilung beibehalten statt 
 widerspruechlichen neuen Zahlen zu uebernehmen - konservativste Wahl, keine Regression, keine
 neue Inkonsistenz im Herzstueck der Fairness-Mechanik. `packages/scoring` bleibt unveraendert.
 
+## 2026-09-09 – CookieNotice (fixed) überdeckte den "Los"-Button auf der Startseite
+
+Nach dem gesamten Umbau ein manueller visueller Check per Screenshot (echter Chromium, iPhone-
+Viewport 390x844) - genau das Muster, das schon einmal den BELL!-Button-Bug gefunden hat (siehe
+Eintrag weiter unten). Diesmal: `CookieNotice` (bisher `position:fixed`, unten am
+Bildschirmrand) legte sich auf der neuen, etwas längeren Startseite über den "Los"-Button beim
+Code-Beitritt - auf einem realen iPhone-Viewport ohne vorheriges Scrollen sichtbar und
+tatsächlich klickblockierend (nicht nur ein Screenshot-Artefakt, mit einem echten
+Viewport-Screenshot verifiziert). Erster Fixversuch (mehr `padding-bottom` auf dem `<main>`)
+war unwirksam und ist selbst eine Lehre wert: `position:fixed` positioniert sich relativ zum
+Viewport, nicht zum Dokumentfluss - zusätzliches Padding im Inhalt verschiebt ein fixiertes
+Element nicht. Echter Fix: `CookieNotice` läuft jetzt im normalen Dokumentfluss statt fixiert
+(steht als letztes Element nach `LegalFooter`) - bei einem reinen Transparenz-Hinweis ohne
+Consent-Pflicht ist das unproblematisch, verhindert aber jede künftige Überdeckung strukturell,
+statt sie nur an dieser einen Stelle wegzupolstern. Per Screenshot erneut verifiziert, komplette
+Playwright-Suite (10 Tests) weiterhin grün.
+
 ## 2026-09-09 – CI-`e2e`-Job kurzzeitig rot zwischen zwei Umbau-Commits
 
 Der Protokoll+Server-Commit des Kläffkarussell-Umbaus (`90913ea`) war lokal per `npm run verify`
