@@ -184,3 +184,43 @@ nicht wiederholt/umgangen, sondern hier dokumentiert. Verifiziert wird das Image
 den `docker build`-CI-Job (regulärer Runner, normaler Internetzugang) oder direkt bei Render
 selbst beim ersten Deploy. Siehe BLOCKERS.md.
 
+## Phase 5 – Audio-Client
+
+Status: abgeschlossen (Engineering-Schicht). `npm run verify` grün. UI-Integration (Buttons,
+Prompts, Wake-Lock-Aufruf am Matchstart) folgt in Phase 6/7 - diese Phase liefert die Bausteine.
+
+- `public/worklets/bark-processor.js`: echter `AudioWorkletProcessor`, spiegelt die DSP-Mathematik
+  aus `packages/scoring/src/dsp.ts` 1:1 (eigene FFT, Hann-Fenster, kausales Fenster) von Hand in
+  reines JS übertragen. Grund: AudioWorklets können ES-Module-Imports von außerhalb in allen
+  Zielbrowsern (v.a. Safari/iOS) nicht zuverlässig laden, ein Bundling-Schritt dafür würde die
+  Build-Pipeline deutlich verkomplizieren. Das Frame-Gleichheits-Netz sitzt in `packages/scoring`
+  (Offline- vs. Streaming-Extraktion sind dort bewiesen gleich) - diese Datei kann in Vitest nicht
+  direkt getestet werden (kein `AudioWorkletProcessor`-Global in Node), wird aber in Phase 8 per
+  Playwright mit echten (simulierten) Audiodateien gegengeprüft.
+- `lib/audio/capture.ts`: `requestMicrophone()` mit den geforderten Constraints
+  (`autoGainControl:false` etc.), liest danach `track.getSettings()` und vergleicht mit der
+  Anfrage statt ihr zu vertrauen (**AGC-Erkennung**: Safari/iOS ignoriert die Anfrage oft).
+  `createAudioPipeline()` verbindet Mikro → AudioWorklet, **absichtlich nicht** an
+  `audioContext.destination` (kein Sound wird je abgespielt oder gestreamt).
+- `lib/audio/calibration.ts`: reine, browserfreie Funktionen für die drei Kalibrierungsschritte
+  (Median für `noiseFloorDbfs`, 75. Perzentil für `refVoiceDbfs`, Peak für `maxObservedDbfs`),
+  `headroomDb < 12` → Ablehnung, `noiseFloorDbfs > -35` → Warnung. 7 Unit-Tests (echtes Vitest,
+  da reine Arrays/Zahlen ohne Browser-API).
+- `lib/audio/session.ts`: `AudioSession` bündelt EINE Mikro-Pipeline für die ganze Sitzung -
+  liefert sowohl den kontinuierlichen 10-Hz-Pegel-Broadcast (Präsenz, auch in der Lobby) als
+  auch die 3s-Fenster für Kalibrierung und den eigenen Bell-Versuch.
+- `lib/ws-client.ts`: `KlaeffClient` - HELLO/RECONNECT-Handshake, typisiertes Senden über die
+  Zod-Schemas, automatischer Reconnect mit Backoff, **Reconnect bei `visibilitychange`** (iOS
+  friert Hintergrund-Tabs ein - beim Zurückkommen wird sofort neu verbunden, der Server hält den
+  Spieler-Slot ohnehin 60s offen).
+- `lib/wake-lock.ts`: `navigator.wakeLock`-Wrapper, scheitert still bei fehlender Unterstützung.
+- `lib/storage.ts`: Device-UUID/Kalibrierung/Nickname/Avatar in `localStorage`, mit
+  Try/Catch-Fallback falls Storage blockiert ist (privates Fenster etc.).
+- `lib/store/game-store.ts`: Zustand-Store, verdrahtet `KlaeffClient`-Events mit reaktivem
+  UI-State (Lobby, Match, Runden, Pegel, Emotes, Flags).
+
+Noch offen aus der iOS-Liste (bewusst auf Phase 6/7 verschoben, weil sie UI brauchen): Silent-
+Switch-Hinweis (Testton + Bestätigungsdialog, da physische Lautsprecherausgabe aus JS nicht
+messbar ist - ehrlicher Ansatz statt Fake-Messung), PWA-Manifest+Icons, `100dvh` im Layout,
+tatsächlicher Wake-Lock-Aufruf beim Matchstart.
+

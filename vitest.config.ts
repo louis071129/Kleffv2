@@ -8,6 +8,7 @@ export default defineConfig({
       "packages/*/test/**/*.test.ts",
       "server/**/*.test.ts",
       "scripts/**/*.test.ts",
+      "lib/**/*.test.ts",
     ],
     exclude: ["node_modules", ".next", "dist", "e2e"],
     testTimeout: 15000,

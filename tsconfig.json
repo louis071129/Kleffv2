@@ -32,6 +32,8 @@
   "include": [
     "app/**/*.ts",
     "app/**/*.tsx",
+    "lib/**/*.ts",
+    "lib/**/*.tsx",
     "server/**/*.ts",
     "scripts/**/*.ts",
     "e2e/**/*.ts",
