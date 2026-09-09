@@ -66,3 +66,15 @@ normalem Internetzugang laufen wird - das ist der Ort, an dem der Image-Build ta
 verifiziert wird, sobald CI einmal durchlaeuft. Der Besitzer sollte das morgen als Erstes auf der
 Render-Seite pruefen (Render baut das Image selbst, unabhaengig von dieser Sandbox).
 Siehe PROGRESS.md "Morgen am iPad zuerst pruefen" (folgt in Phase 9).
+
+## 2026-09-09 – CI rot: fixtures/audio fehlten auf einem frischen Checkout
+
+Der erste echte CI-Lauf (nach der Trigger-Erweiterung oben) schlug fehl: `packages/scoring/test/score.test.ts`
+brach mit `ENOENT` auf `fixtures/audio/*.wav` ab. Ursache: diese Dateien sind bewusst gitignored
+(generierte Artefakte), aber `npm test`/`npm run verify` haben sie nie selbst erzeugt - lokal
+lief alles gruen, weil die Dateien aus einem frueheren `npm run gen-fixtures`-Aufruf noch auf
+Platte lagen. Ein frischer Checkout (wie in CI) hat sie nicht. Fix: `pretest`-Hook in
+`package.json` ruft jetzt automatisch `npm run gen-fixtures` vor jedem `npm test` auf (npm fuehrt
+`pre<script>`-Hooks automatisch aus, auch wenn `test` ueber `npm run verify` verschachtelt
+aufgerufen wird). Lokal verifiziert: `fixtures/audio/*.wav` geloescht, `npm test` frisch
+laufen lassen - alle 75 Tests weiterhin gruen.
