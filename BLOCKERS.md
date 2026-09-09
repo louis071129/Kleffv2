@@ -78,3 +78,25 @@ Platte lagen. Ein frischer Checkout (wie in CI) hat sie nicht. Fix: `pretest`-Ho
 `pre<script>`-Hooks automatisch aus, auch wenn `test` ueber `npm run verify` verschachtelt
 aufgerufen wird). Lokal verifiziert: `fixtures/audio/*.wav` geloescht, `npm test` frisch
 laufen lassen - alle 75 Tests weiterhin gruen.
+
+## 2026-09-09 – Zwei echte Bugs beim visuellen Testen von Phase 6 gefunden
+
+Erst manuell mit echtem (headless) Chromium getestet statt dem Build blind zu vertrauen. Zwei
+Bugs gefunden:
+
+1. **Hydration-Mismatch**: der Zustand-Store las Nickname/Avatar/Device-UUID beim Store-Init
+   direkt aus `localStorage`, gesteuert ueber `typeof window !== "undefined"`. Das liefert beim
+   Server-Render (kein `window`) andere Werte als beim Client-Hydrate - sichtbar u.a. als
+   `rx={NaN}` im generierten Avatar-SVG (Snout-Breite haengt vom Avatar-Seed ab, der serverseitig
+   ein leeres Objekt war). Fix: Store startet IMMER mit denselben Defaults (server- und
+   client-identisch), echte Werte kommen ueber eine neue `hydrate()`-Action aus einem
+   `useEffect` in `GameApp` nach dem Mount - klassisches Next.js-Muster fuer
+   localStorage-gestuetzten State.
+2. **HMR kaputt im Dev-Modus**: der Custom-Server hat in `server/index.ts` jeden
+   WebSocket-Upgrade ausser `/ws` mit `socket.destroy()` gekillt - das traf auch Next.js'
+   eigenes Fast-Refresh-WebSocket (`/_next/webpack-hmr`). Fix: `app.getUpgradeHandler()`
+   (von Next.js fuer genau diesen Custom-Server-Fall bereitgestellt) uebernimmt jetzt alle
+   Upgrades ausser `/ws`.
+
+Beide durch einen echten Browser-Durchlauf gefunden (Home -> Mikro -> Kalibrierung -> Lobby),
+nicht durch Codelesen - ein guter Beleg dafuer, dass "baut durch" nicht "funktioniert" heisst.

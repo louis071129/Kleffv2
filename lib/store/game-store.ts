@@ -4,7 +4,7 @@ import { create } from "zustand";
 import type { AntiCheatFlag, BarkScore } from "@klaeff/scoring";
 import type { AvatarSeed, ServerMessage } from "@klaeff/protocol";
 import { getKlaeffClient, type ConnectionStatus } from "../ws-client";
-import { getOrCreateDeviceUuid, loadAvatar, loadNickname, saveAvatar, saveNickname } from "../storage";
+import { DEFAULT_AVATAR, getOrCreateDeviceUuid, loadAvatar, loadNickname, saveAvatar, saveNickname } from "../storage";
 
 type LobbySnapshot = Extract<ServerMessage, { type: "LOBBY_STATE" }>["lobby"];
 type MatchStandings = Extract<ServerMessage, { type: "MATCH_RESULT" }>["standings"];
@@ -41,6 +41,8 @@ interface GameStoreState {
   connect: () => void;
   goHome: () => void;
   setScreen: (screen: Screen) => void;
+  /** Laedt Nickname/Avatar/Device-UUID aus localStorage. Nur client-seitig nach dem Mount aufrufen. */
+  hydrate: () => void;
 }
 
 let wired = false;
@@ -102,9 +104,13 @@ export const useGameStore = create<GameStoreState>((set, get) => {
   return {
     status: "disconnected",
     playerId: null,
-    deviceUuid: typeof window !== "undefined" ? getOrCreateDeviceUuid() : "",
-    nickname: typeof window !== "undefined" ? (loadNickname() ?? "") : "",
-    avatar: typeof window !== "undefined" ? loadAvatar() : ({} as AvatarSeed),
+    // Bewusst IMMER dieselben Defaults, egal ob Server- oder Client-Render:
+    // localStorage existiert beim SSR-Durchlauf nicht, ein Zweig hier wuerde
+    // einen Hydration-Mismatch erzeugen. Echte Werte kommen ueber hydrate()
+    // aus einem useEffect nach dem Mount (siehe GameApp).
+    deviceUuid: "",
+    nickname: "",
+    avatar: DEFAULT_AVATAR,
     screen: "home",
 
     lobby: null,
@@ -134,5 +140,12 @@ export const useGameStore = create<GameStoreState>((set, get) => {
     },
     goHome: () => set({ screen: "home", lobby: null, matchId: null, currentRound: null, matchStandings: null }),
     setScreen: (screen) => set({ screen }),
+    hydrate: () => {
+      set({
+        deviceUuid: getOrCreateDeviceUuid(),
+        nickname: loadNickname() ?? "",
+        avatar: loadAvatar(),
+      });
+    },
   };
 });

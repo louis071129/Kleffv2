@@ -18,6 +18,10 @@ async function main(): Promise<void> {
 
   const wss = new WebSocketServer({ noServer: true });
   getGameServer().attach(wss);
+  // Next.js braucht im Dev-Modus ein eigenes Upgrade fuer Fast-Refresh/HMR
+  // (/_next/webpack-hmr) - alles ausser unserem eigenen /ws-Pfad wird an
+  // Next durchgereicht statt die Verbindung zu killen.
+  const nextUpgradeHandler = app.getUpgradeHandler();
 
   httpServer.on("upgrade", (req, socket, head) => {
     if (req.url === "/ws") {
@@ -25,7 +29,7 @@ async function main(): Promise<void> {
         wss.emit("connection", ws, req);
       });
     } else {
-      socket.destroy();
+      void nextUpgradeHandler(req, socket, head);
     }
   });
 

@@ -59,7 +59,7 @@ export function saveNickname(nickname: string): void {
   safeSet(KEYS.nickname, nickname);
 }
 
-const DEFAULT_AVATAR: AvatarSeed = {
+export const DEFAULT_AVATAR: AvatarSeed = {
   headShape: 0,
   ears: 0,
   furColor: 0,

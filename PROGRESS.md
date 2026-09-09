@@ -224,3 +224,57 @@ Switch-Hinweis (Testton + Bestätigungsdialog, da physische Lautsprecherausgabe 
 messbar ist - ehrlicher Ansatz statt Fake-Messung), PWA-Manifest+Icons, `100dvh` im Layout,
 tatsächlicher Wake-Lock-Aufruf beim Matchstart.
 
+## Phase 6 – Designsystem und UI
+
+Status: abgeschlossen. `npm run verify` und `npm run build` grün. **Der komplette Weg
+Startseite → Mikro freigeben → Kalibrierung (echte 3 Schritte über einen echten
+AudioWorklet) → WebSocket-Handshake → Schnellsuche → Live-Lobby wurde mit einem echten
+(headless) Chromium samt `--use-fake-device-for-media-stream` manuell durchgespielt und
+per Screenshot verifiziert - nicht nur "sieht compiliert aus", sondern tatsächlich
+end-to-end funktionsfähig.**
+
+Aufgebaut:
+- `app/globals.css`: alle Design-Tokens aus dem Auftrag als CSS-Variablen, `.klaeff-card`
+  (dicke Kontur + harter Offset-Schatten, keine Verläufe/Weichzeichner) und `.klaeff-btn`
+  (44px Mindesthöhe, Press-Feedback über `transform`, kein `:hover`-abhängiges Verhalten),
+  `prefers-reduced-motion: reduce` global respektiert.
+- `app/layout.tsx`: Bricolage Grotesque (800, Display) und Inter (400/600, UI) über
+  `next/font/google` (kein manueller Asset-Download, wie gefordert), `100dvh`-taugliches
+  Layout, `viewport-fit: cover` für die Safe-Area.
+- `app/manifest.ts` + `app/icon.tsx` + `app/apple-icon.tsx`: PWA-Manifest und Icons komplett
+  **generiert** über Next.js' eingebaute `ImageResponse`-Konvention (kein Icon-Download,
+  kein Design-Tool) - erfüllt "als SVG/generiert, keine Downloads" ohne Zusatz-Tooling.
+- `components/Avatar.tsx`: SVG-Avatar-Builder, alle 9 Kategorien aus dem Auftrag
+  (Kopfform×5, Ohren×6, Fell×4×4-Muster, Augen×6, Schnauze×4, Halsband×8+5-Anhänger,
+  Accessoire×11 inkl. "keins"), deterministisch aus dem `AvatarSeed`. Der Mund ist ein
+  eigenes Element mit `mouthOpen`-Prop (0..1) - die Live-Reaktion auf den Mikro-Pegel ist
+  vorbereitet, die tatsächliche Verdrahtung mit Idle-Animationen ist Phase 7.
+- `components/Button.tsx`, `Card.tsx`, `ConnectionDot.tsx`, `ScoreReveal.tsx` (Framer-Motion-
+  Score-Reveal: die vier Komponenten laufen nacheinander als Balken hoch, dann Punch-Scale
+  auf die Gesamtzahl - wie im Auftrag beschrieben).
+- Screens: `HomeScreen`, `MicPermissionScreen`, `CalibrationScreen` (inkl. Ton-Check-Schritt
+  für den Silent-Switch-Hinweis auf iOS - ehrlich als Selbstauskunft umgesetzt, weil
+  physische Lautsprecherausgabe aus JS nicht messbar ist), `LobbyScreen` (Code-Anzeige,
+  Kick-Buttons für den Host, Countdown-Anzeige), `MatchScreen` (Bühnenmetapher: Barker groß
+  mittig, Publikum im Halbkreis kleiner, Publikumsmeter als reine Show, Bell-Button startet
+  das 3s-Fenster), `ResultScreen` (Podium für die Top 3, Liste für den Rest).
+- `components/GameApp.tsx`: Orchestrator - lokale Vor-Verbindungs-Screens (Home/Mikro/
+  Kalibrierung) vs. server-getriebener `screen`-State aus dem Store (Lobby/Match/Ergebnis).
+  Überspringt Mikro+Kalibrierung automatisch, wenn in dieser Sitzung schon kalibriert wurde
+  (z.B. bei "Nochmal!" nach einem Match) - sonst müsste man vor jedem Match neu kalibrieren.
+- `app/j/[code]/page.tsx`: Join-Link-Route, füllt den Code vor.
+
+Zwei echte Bugs beim visuellen Testen gefunden und behoben (siehe BLOCKERS.md):
+1. Hydration-Mismatch, weil der Zustand-Store beim Erststart Nickname/Avatar/Device-UUID
+   direkt aus `localStorage` las - das existiert beim Server-Render nicht, SSR- und Client-HTML
+   liefen auseinander (sichtbar als `NaN`-Attribute im Avatar-SVG). Fix: Store startet immer mit
+   denselben Defaults, echte Werte kommen über `hydrate()` aus einem `useEffect` nach dem Mount.
+2. Der Custom-Server hat im Dev-Modus alle WebSocket-Upgrades außer `/ws` einfach gekillt -
+   das hat Next.js' eigenes Fast-Refresh/HMR (`/_next/webpack-hmr`) lahmgelegt. Fix:
+   `app.getUpgradeHandler()` uebernimmt jetzt alles ausser `/ws`.
+
+Bekannte Lücken, bewusst auf Phase 7 verschoben: Idle-Animationen (Blinzeln/Schwanzwedeln),
+Emote-Rad, echte Screen-Shake-Kopplung an den Live-Pegel, WebAudio-Soundeffekte, Haptik,
+Wertungssprüche. Die Grundstruktur dafür (Avatar-`mouthOpen`-Prop, Publikumsmeter,
+Levels-State im Store) steht bereits.
+

@@ -9,6 +9,12 @@
   --violet: #7a5cff;
   --pink: #ff2d8a;
   --muted: #8b8598;
+
+  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --font-ui: "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  --shadow-offset: 6px;
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 * {
@@ -25,9 +31,107 @@ body {
 body {
   margin: 0;
   min-height: 100dvh;
+  font-family: var(--font-ui);
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+h1,
+h2,
+h3,
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.03em;
+  font-weight: 800;
+}
+
+button,
+input,
+select {
+  font-family: inherit;
 }
 
 :focus-visible {
   outline: 3px solid var(--lime);
   outline-offset: 2px;
+}
+
+/* Arcade-Karte: dicke Kontur + harter Offset-Schatten, keine Weichzeichner. */
+.klaeff-card {
+  background: var(--paper);
+  color: var(--ink);
+  border: 3px solid var(--ink);
+  border-radius: 20px;
+  box-shadow: var(--shadow-offset) var(--shadow-offset) 0 0 var(--card-shadow-color, var(--bark));
+}
+
+.klaeff-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0.75rem 1.5rem;
+  border: 3px solid var(--ink);
+  border-radius: 14px;
+  background: var(--bark);
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  box-shadow: 4px 4px 0 0 var(--ink);
+  transition:
+    transform 0.15s var(--spring),
+    box-shadow 0.15s var(--spring);
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.klaeff-btn:active {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0 0 var(--ink);
+}
+
+.klaeff-btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: 4px 4px 0 0 var(--ink);
+  transform: none;
+}
+
+.klaeff-btn--secondary {
+  background: var(--paper);
+}
+
+.klaeff-btn--lime {
+  background: var(--lime);
+}
+
+.klaeff-btn--violet {
+  background: var(--violet);
+  color: var(--paper);
+}
+
+.klaeff-btn--pink {
+  background: var(--pink);
+  color: var(--paper);
+}
+
+.klaeff-score {
+  font-family: var(--font-display);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  font-size: clamp(2.5rem, 10vw, 6rem);
+  line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
