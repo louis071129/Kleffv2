@@ -171,6 +171,37 @@ Zusaetzlich zu pruefen/auszufuellen:
   laesst.
 - Nutzungsbedingungen: konkrete Mindestalters-Empfehlung (Platzhalter mit Vorschlag 12/16 Jahre).
 
+## 2026-09-09 – Zweiter AUFTRAG: Kläffkarussell/Bark-Synth-Umbau, Git-Workflow-Konflikt erneut
+
+Ein neuer, sehr viel umfangreicherer AUFTRAG kam rein: KLÄFF soll von der bisherigen Struktur
+(Schnellsuche + private Lobby, beide mit reinem Messwert-Scoring ohne Ton-Übertragung) auf zwei
+grundverschiedene Modi umgebaut werden - "Kläffkarussell" (Dauer-1v1-Matchmaking mit Fremden,
+niemals rohe Stimme, stattdessen ein client-seitig live synthetisierter Bark-Sound gesteuert von
+der echten Stimme) und "Private Lobby" (jetzt mit echter, unveränderter Tonübertragung per
+`MediaRecorder`, in-memory Blob-Relay, flexible Spielerzahl 2-8, Kläffduell-Bracket/Rudel-Modi
+ab 3 Spielern).
+
+Derselbe Git-Workflow-Konflikt wie beim allerersten AUFTRAG (siehe Eintrag oben,
+2026-09-09 "Git-Workflow"): der neue Text verlangt wieder `gh`-basierte Phasen-Branches
+(`phase/01-scoring` etc.) mit PRs gegen `main`, Squash-Merge durch die Session selbst. Die
+Plattformregel dieser Session bleibt unverändert härter und spezifischer: fester Branch
+`claude/klaeff-multiplayer-game-ur6t7v`, kein Force-Push, keine PR ohne ausdrücklichen Wunsch.
+Gleiche Entscheidung wie beim ersten Mal: Plattformregel hat Vorrang. Weiterhin einzelne Commits
+auf dem einen Branch, nach jeder Phase gepusht, hier in PROGRESS.md dokumentiert.
+
+**Abweichung von "keine Rückfragen, kein Warten":** Trotz der harten Regel 1 im AUFTRAG-Text
+wurde vor Beginn eine einzige Rückfrage gestellt (`AskUserQuestion`), weil sich die Situation
+fundamental von der Ausgangslage des ersten AUFTRAGs unterscheidet: das ist kein leeres Repo mehr,
+sondern eine bereits fertig gebaute, getestete und für den heutigen iPad-Test deployte App, mit
+einer live im selben Gespräch gerade eben fertiggestellten, sorgfältig am tatsächlichen
+Datenfluss ausgerichteten Datenschutzerklärung ("kein Rohton verlässt je das Gerät"). Der neue
+Auftrag würde genau diese Aussage für private Lobbys widerlegen (echter Ton wird künftig
+übertragen) und einen Großteil der bestehenden, funktionierenden Architektur ersetzen. Ein
+mehrstündiger Voll-Umbau eines bereits laufenden, heute Abend genutzten Systems ohne Bestätigung
+schien das eine legitime Ausnahme von der Kein-Rückfragen-Regel wert - eine reale, anwesende
+Person antwortet hier live, das ist kein unbeaufsichtigter Übernacht-Lauf wie beim ersten
+AUFTRAG. Nutzer hat "voll umbauen" bestätigt, ab hier wieder autonom ohne weitere Rückfragen.
+
 ## 2026-09-09 – CookieNotice als globales Fixed-Element blockierte den BELL!-Button
 
 Beim ersten Einbau lag `<CookieNotice />` im Root-Layout (`app/layout.tsx`), damit auf jedem

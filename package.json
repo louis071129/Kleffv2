@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "NODE_ENV=production tsx server/index.ts",
     "lint": "eslint . --max-warnings=0",
-    "typecheck": "tsc -p tsconfig.json --noEmit && npm run typecheck -w packages/scoring && npm run typecheck -w packages/protocol",
+    "typecheck": "tsc -p tsconfig.json --noEmit && npm run typecheck -w packages/scoring && npm run typecheck -w packages/protocol && npm run typecheck -w packages/bark-synth",
     "pretest": "npm run gen-fixtures",
     "test": "vitest run",
     "test:watch": "npm run gen-fixtures && vitest",
@@ -21,6 +21,7 @@
     "verify": "npm run lint && npm run typecheck && npm run test"
   },
   "dependencies": {
+    "@klaeff/bark-synth": "*",
     "@klaeff/protocol": "*",
     "@klaeff/scoring": "*",
     "framer-motion": "^11.15.0",

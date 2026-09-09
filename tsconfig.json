@@ -25,7 +25,8 @@
     "paths": {
       "@/*": ["app/*"],
       "@klaeff/scoring": ["packages/scoring/src/index.ts"],
-      "@klaeff/protocol": ["packages/protocol/src/index.ts"]
+      "@klaeff/protocol": ["packages/protocol/src/index.ts"],
+      "@klaeff/bark-synth": ["packages/bark-synth/src/index.ts"]
     },
     "plugins": [{ "name": "next" }]
   },

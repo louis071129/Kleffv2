@@ -17,6 +17,7 @@ export default defineConfig({
     alias: {
       "@klaeff/scoring": path.resolve(__dirname, "packages/scoring/src/index.ts"),
       "@klaeff/protocol": path.resolve(__dirname, "packages/protocol/src/index.ts"),
+      "@klaeff/bark-synth": path.resolve(__dirname, "packages/bark-synth/src/index.ts"),
     },
   },
 });

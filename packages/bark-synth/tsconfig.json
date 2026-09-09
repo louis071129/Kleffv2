@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@klaeff/scoring": ["../scoring/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
