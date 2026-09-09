@@ -184,6 +184,10 @@ nicht wiederholt/umgangen, sondern hier dokumentiert. Verifiziert wird das Image
 den `docker build`-CI-Job (regulärer Runner, normaler Internetzugang) oder direkt bei Render
 selbst beim ersten Deploy. Siehe BLOCKERS.md.
 
+**Update (nach Phase 6):** der `docker`-CI-Job ist inzwischen tatsächlich gelaufen (GitHub
+Actions hat normalen Internetzugang, anders als diese Sandbox) - **`docker build .` ist grün**.
+Das Dockerfile ist damit verifiziert, nicht nur plausibilitätsgeprüft.
+
 ## Phase 5 – Audio-Client
 
 Status: abgeschlossen (Engineering-Schicht). `npm run verify` grün. UI-Integration (Buttons,
@@ -320,4 +324,43 @@ echte Pro-Spieler-Latenz (nur Heartbeat zur Liveness, kein Zeitstempel-Echo). Um
 grün (verbunden) und grau (getrennt) über das vorhandene `connected`-Feld aus `LOBBY_STATE`/
 `PRESENCE_STATUS`. Eine echte Latenzmessung würde eine Protokolländerung brauchen (Ping mit
 Zeitstempel, Pong-Echo) - ehrlich als Lücke dokumentiert statt eine Zahl vorzutäuschen.
+
+## Phase 8 – E2E und Politur
+
+Status: abgeschlossen. Alle 5 Playwright-Tests lokal grün (2,5 Min. Gesamtlaufzeit), mit
+echten Fake-Audio-Dateien durch die komplette Kalibrierungs- und Match-Pipeline.
+
+- `e2e/helpers.ts`: gemeinsame Klick-Helfer (Mikro freigeben → Ton-Check → Kalibrierung
+  abwarten → weiter), damit die Tests nicht dieselbe Klicksequenz duplizieren.
+- `e2e/two-player-match.spec.ts` (**Akzeptanzkriterium**): zwei Browser-Kontexte, Host
+  erstellt eine private Lobby, Gast tritt per Code bei, beide spielen ihre Runde, beide sehen
+  den Ergebnis-Screen mit echten (unterschiedlichen) Scores.
+- `e2e/quickmatch-three-players.spec.ts` (**Akzeptanzkriterium**): drei Kontexte joinen
+  nacheinander die Schnellsuche, landen nachweislich in derselben Lobby, der echte 20s-
+  Public-Countdown läuft durch, alle drei sehen "Runde 1" - beweist, dass die Warteschlange
+  wirklich zusammenführt statt nur Einzel-Client-Pfade zu testen.
+- `e2e/ipad-screenshots.spec.ts`: Startseite + Lobby in beiden iPad-Viewport-Größen (1024×768
+  und 768×1024), nach `artifacts/e2e/` geschrieben.
+- `e2e/performance.spec.ts`: Performance-Rauchtest über `requestAnimationFrame`-Sampling
+  während die Lobby mit mehreren animierten Avataren läuft. **Ehrlich dokumentiert im Test
+  selbst**: ein geteilter/virtualisierter CI-Runner ist kein echtes Mobilgerät, das ist ein
+  Regressions-Rauchtest (Schwelle >30fps als Proxy), kein belastbarer 60fps-Beweis für echte
+  iPad-Hardware. In dieser Sandbox gemessen: ~40fps.
+
+Zwei echte Bugs beim Aufsetzen der E2E-Suite gefunden und behoben:
+1. `playwright.config.ts` hatte `executablePath` fest auf einen Sandbox-Pfad
+   (`/opt/pw-browsers/chromium`) as Fallback verdrahtet - das hätte in GitHub Actions (wo
+   Playwright seinen eigenen Browser unter einem anderen Pfad installiert) mit "executable
+   doesn't exist" fehlgeschlagen. Fix: nur setzen wenn explizit über `PLAYWRIGHT_CHROMIUM_PATH`
+   vorgegeben, sonst Playwrights eigene Auflösung nutzen.
+2. Die echten Zeiten für Kalibrierung (3× 3s) und den öffentlichen 20s-Countdown wurden beim
+   ersten Testlauf unterschätzt - der Drei-Spieler-Test brauchte mit dem globalen 60s-Timeout
+   fast eine Minute *zu lange* (kam aber inhaltlich korrekt bis "Runde 1", nur der Timeout
+   war zu knapp). Fix: globaler Timeout auf 90s angehoben, der Drei-Spieler-Test bekommt
+   zusätzlich `testInfo.setTimeout(150_000)`.
+
+CI-Kontext: der bereits laufende GitHub-Actions-`e2e`-Job (aus Phase 0) schlug bisher mit
+"No tests found" fehl, weil es noch keine Test-Dateien gab - das ist jetzt behoben, sobald
+dieser Commit läuft. Der `docker`-CI-Job lief in der Zwischenzeit bereits erfolgreich durch
+(siehe Phase-4-Update oben).
 

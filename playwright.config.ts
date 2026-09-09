@@ -4,7 +4,10 @@ const PORT = 3100;
 
 export default defineConfig({
   testDir: "./e2e",
-  timeout: 60_000,
+  // Echte Kalibrierung (3x3s pro Spieler) und der 20s-Public-Countdown
+  // brauchen echte Zeit - grosszuegiger globaler Timeout, einzelne Tests
+  // (z.B. drei-Spieler-Schnellsuche) setzen bei Bedarf noch mehr.
+  timeout: 90_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
   workers: 1,
@@ -21,7 +24,11 @@ export default defineConfig({
         "--use-fake-device-for-media-stream",
         "--use-file-for-fake-audio-capture=fixtures/audio/bark-loud.wav",
       ],
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH ?? "/opt/pw-browsers/chromium",
+      // Nur setzen wenn explizit vorgegeben (z.B. in dieser Sandbox). In CI
+      // und normalen Dev-Umgebungen soll Playwright den Browser nehmen, den
+      // es selbst ueber "playwright install" verwaltet - ein hartkodierter
+      // Sandbox-Pfad wuerde dort mit "executable doesn't exist" fehlschlagen.
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH,
     },
   },
   webServer: {
@@ -34,14 +41,17 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      testIgnore: /ipad-screenshots\.spec\.ts/,
     },
     {
       name: "ipad-landscape",
       use: { viewport: { width: 1024, height: 768 } },
+      testMatch: /ipad-screenshots\.spec\.ts/,
     },
     {
       name: "ipad-portrait",
       use: { viewport: { width: 768, height: 1024 } },
+      testMatch: /ipad-screenshots\.spec\.ts/,
     },
   ],
 });
