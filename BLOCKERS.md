@@ -202,6 +202,23 @@ schien das eine legitime Ausnahme von der Kein-Rückfragen-Regel wert - eine rea
 Person antwortet hier live, das ist kein unbeaufsichtigter Übernacht-Lauf wie beim ersten
 AUFTRAG. Nutzer hat "voll umbauen" bestätigt, ab hier wieder autonom ohne weitere Rückfragen.
 
+## 2026-09-09 – AGC-Punkteverteilung im neuen Auftrag nicht uebernommen (Summe ergibt nicht 100)
+
+Der neue Auftrag nennt fuer `agcActive` eine AGC-Punkteverteilung von Lautstaerke 50->35,
+Attack 20->27, Crest 15->18, Bell-Charakter unveraendert 15. Summe: 35+27+18+15 = 95, nicht 100 -
+eine Inkonsistenz im Auftragstext (bei `agcActive` waere maximal 95 statt 100 Punkten
+erreichbar, ein stiller Nachteil fuer AGC-Geraete der nirgends explizit gewollt scheint).
+Die bereits bestehende, seit Phase 1 getestete Implementierung (`packages/scoring/src/score.ts`)
+verwendet 35/27.5/22.5/15 (Summe exakt 100) - inhaltlich dieselbe Idee (Lautstaerke-Gewicht
+sinkt, Differenz wandert zu Attack/Crest), nur intern konsistent. Alle anderen im neuen Auftrag
+genannten Scoring-Parameter (Attack-/Crest-Schwellen, Bell-Charakter-Gaussglocke, Dauer-
+Korrektur, alle drei Anti-Cheat-Schwellen, Kalibrierungs-Schwellen) stimmen bereits exakt mit
+der bestehenden Implementierung ueberein.
+
+Entscheidung: bestehende, korrekte 35/27.5/22.5/15-Verteilung beibehalten statt der
+widerspruechlichen neuen Zahlen zu uebernehmen - konservativste Wahl, keine Regression, keine
+neue Inkonsistenz im Herzstueck der Fairness-Mechanik. `packages/scoring` bleibt unveraendert.
+
 ## 2026-09-09 – CookieNotice als globales Fixed-Element blockierte den BELL!-Button
 
 Beim ersten Einbau lag `<CookieNotice />` im Root-Layout (`app/layout.tsx`), damit auf jedem
