@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+:root {
+  --ink: #0b0a0f;
+  --steel: #1c1a24;
+  --paper: #f4efe4;
+  --bark: #ff5c1a;
+  --lime: #b8ff3d;
+  --violet: #7a5cff;
+  --pink: #ff2d8a;
+  --muted: #8b8598;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--ink);
+  color: var(--paper);
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+}
+
+:focus-visible {
+  outline: 3px solid var(--lime);
+  outline-offset: 2px;
+}
