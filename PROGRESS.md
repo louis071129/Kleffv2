@@ -104,3 +104,47 @@ eigenständigen NS-Bezugsbegriff (fürs Wort "SS"), das hätte aber "Assassin", 
 harmlose Namen fälschlich blockiert. Entfernt - die anderen NS-Begriffe ("hitler", "nazi",
 "sieg heil", "1488", "88") reichen als Signal. Siehe BLOCKERS.md.
 
+60 Tests grün (14 Scoring + 46 Protocol), `npm run verify` durchgehend grün.
+
+## Phase 3 – Server und Transport
+
+Status: abgeschlossen. `npm run verify` und `npm run build` grün. **Akzeptanzkriterium
+erfüllt: fünf echte WebSocket-Clients finden sich über die Schnellsuche und spielen ein
+komplettes Match durch (echter Integrationstest, kein Mock).**
+
+`server/game-server.ts`: die `GameServer`-Klasse hält den kompletten Match-State in-memory
+(Sessions, Lobbys, Matches, Kalibrierungsprofile, Replay-Historie, Report-State) und verdrahtet
+die reinen Reducer aus `@klaeff/protocol` mit echten WebSocket-Verbindungen:
+- Handshake: `HELLO` (neu, mit deviceUuid/Nickname/Avatar) oder `RECONNECT` (bestehende Sitzung
+  per sessionToken+playerId wieder anhängen). `HELLO` ist eine neue Protokoll-Nachricht, die in
+  Phase 2 noch fehlte - das Protokoll darf sich mit den Anforderungen des Servers weiterentwickeln.
+- Schnellsuche: älteste offene Lobby mit Platz wird aufgefüllt, sonst neue eröffnet.
+- Server-Tick (Standard 1s, in Tests auf 30ms verkürzt) ruft `evaluateCountdown` für alle
+  offenen Lobbys auf und startet Matches automatisch. `evaluateCountdown` bekam dafür einen
+  optionalen `countdownMs`-Parameter (Standard weiterhin die geforderten 20s) - so können Tests
+  den Countdown auf wenige hundert Millisekunden verkürzen, ohne die Produktions-Konstante
+  anzufassen.
+- Match-Ablauf: `ROUND_STARTED` pro Barker, `BARK_SUBMIT` wird serverseitig mit `scoreBark`
+  bewertet (der Client schickt nur rohe Frames + Kalibrierung, nie einen Score - siehe
+  Server-Autoritativ-Regel), `ROUND_RESULT`/`FLAG_BROADCAST` an die ganze Lobby, automatischer
+  Rundenwechsel, `MATCH_RESULT` mit Rangliste am Ende.
+- Rundentimeout: sendet ein Spieler keine Frames, wertet der Server nach `roundTimeoutMs`
+  automatisch mit leeren Frames (Score 0) und macht weiter - blockiert das Match nie.
+- Reconnect: 60s Gnadenfrist (`disconnectGraceMs`), Spieler-Slot bleibt reserviert, `RECONNECT`
+  hängt eine neue WebSocket-Verbindung an dieselbe Sitzung.
+- Heartbeat alle 15s (`HEARTBEAT_PING`/`HEARTBEAT_PONG`).
+- `/api/health` liefert jetzt echte Werte (Uptime, Version, aktive Lobbys, Spielerzahl) aus
+  einer prozessweiten Singleton-Instanz (`globalThis`-Cache, robust gegen getrennte
+  Modul-Graphen zwischen Custom-Server und Next-Webpack-Bundle).
+
+8 Integrationstests mit echten `ws`-Clients gegen einen echten `http`+`WebSocketServer`
+(die reale Custom-Server-Upgrade-Route auf `/ws` wurde zusätzlich manuell durchgetestet):
+Schnellsuche mit 5 Spielern komplett durchgespielt, Backfill/Countdown-Verhalten,
+Disconnect+Reconnect mitten in der Runde, Host verlässt private Lobby (Host-Übernahme),
+doppelter Join derselben Device-UUID, Rundentimeout ohne Frames, Nickname-Filter-Verdrahtung,
+Melde-Schwelle sperrt die Schnellsuche.
+
+Ein Build-Bug gefunden und behoben: `next build` scheiterte an den `.js`-Endungen in unseren
+relativen Imports (Node-ESM-Konvention). Fix über `webpack.resolve.extensionAlias` in
+`next.config.ts`. Siehe BLOCKERS.md.
+

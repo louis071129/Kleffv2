@@ -82,6 +82,12 @@ export const LobbySnapshotSchema = z.object({
 // --- Client -> Server ---
 
 export const ClientMessageSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("HELLO"),
+    deviceUuid: z.string().min(1).max(100),
+    nickname: z.string().min(1).max(40),
+    avatar: AvatarSeedSchema,
+  }),
   z.object({ type: z.literal("SET_NICKNAME"), nickname: z.string().min(1).max(40) }),
   z.object({ type: z.literal("SET_AVATAR"), avatar: AvatarSeedSchema }),
   z.object({ type: z.literal("QUICKMATCH_JOIN") }),

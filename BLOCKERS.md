@@ -41,3 +41,14 @@ anderen Namen mit "ss" darin - unbrauchbar breit. Entfernt, ohne Ersatz. Die and
 NS-Begriffe im Filter ("hitler", "nazi", "sieg heil", "1488", "88", "adolf", "auschwitz",
 "holocaust") bleiben und reichen als Signal fuer den eindeutigen Fall. Ehrlich: ein
 generisches SS-Kuerzel laesst sich ohne massive False-Positives kaum zuverlaessig filtern.
+
+## 2026-09-09 – Next.js/Webpack braucht extensionAlias fuer .js-Importe aus TS-Quellen
+
+Der gesamte Server- und Package-Code nutzt explizite ".js"-Endungen in relativen Imports
+(Node-ESM-Konvention - noetig, damit tsx/Node den Custom-Server direkt aus TypeScript-Quellen
+starten kann, ohne Kompilierschritt). Next.js' Webpack-Build kennt diese Konvention aber nicht
+von sich aus und bricht beim `next build` mit "Module not found" ab, sobald eine App-Route
+(hier `/api/health`) Server-Code importiert. Fix: `next.config.ts` bekommt einen
+`webpack(config)`-Hook mit `resolve.extensionAlias: { ".js": [".ts", ".tsx", ".js"] }` - das
+ist der von Next selbst dokumentierte Weg fuer genau diesen Fall. Kein Codeumbau noetig, betrifft
+nur die Webpack-Konfiguration.

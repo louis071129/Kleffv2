@@ -134,13 +134,13 @@ export function kickPlayer(lobby: Lobby, requesterId: PlayerId, targetId: Player
  * genug Spieler da sind, und startet das Match wenn der Countdown ablaeuft
  * (sofern immer noch genug Spieler da sind - sonst zurueck auf "waiting").
  */
-export function evaluateCountdown(lobby: Lobby, now: number): Lobby {
+export function evaluateCountdown(lobby: Lobby, now: number, countdownMs: number = PUBLIC_COUNTDOWN_MS): Lobby {
   if (lobby.mode !== "public") {
     return lobby;
   }
 
   if (lobby.phase === "waiting" && lobby.players.length >= lobby.minPlayersToStart) {
-    return { ...lobby, phase: "countdown", countdownEndsAt: now + PUBLIC_COUNTDOWN_MS, updatedAt: now };
+    return { ...lobby, phase: "countdown", countdownEndsAt: now + countdownMs, updatedAt: now };
   }
 
   if (lobby.phase === "countdown" && lobby.countdownEndsAt !== null && now >= lobby.countdownEndsAt) {

@@ -1,11 +1,6 @@
 import { NextResponse } from "next/server";
-
-const startedAt = Date.now();
+import { getGameServer } from "../../../server/game-server.js";
 
 export function GET(): NextResponse {
-  return NextResponse.json({
-    status: "ok",
-    uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
-    version: process.env.npm_package_version ?? "0.1.0",
-  });
+  return NextResponse.json(getGameServer().health());
 }

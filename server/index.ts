@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import next from "next";
 import { WebSocketServer } from "ws";
-import { attachGameServer } from "./ws";
+import { getGameServer } from "./game-server.js";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = Number.parseInt(process.env.PORT ?? "3000", 10);
@@ -17,7 +17,7 @@ async function main(): Promise<void> {
   });
 
   const wss = new WebSocketServer({ noServer: true });
-  attachGameServer(wss);
+  getGameServer().attach(wss);
 
   httpServer.on("upgrade", (req, socket, head) => {
     if (req.url === "/ws") {
