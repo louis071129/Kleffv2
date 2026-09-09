@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { LegalFooter } from "../../components/LegalFooter";
+import { CookieNotice } from "../../components/CookieNotice";
 
 export default function GatePage(): React.ReactElement {
   const [password, setPassword] = useState("");
@@ -58,6 +60,8 @@ export default function GatePage(): React.ReactElement {
           <p className="mt-3 text-sm text-[var(--pink)]">Falsches Passwort. Nochmal versuchen.</p>
         )}
       </div>
+      <LegalFooter />
+      <CookieNotice />
     </main>
   );
 }

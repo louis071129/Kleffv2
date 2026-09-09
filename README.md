@@ -221,6 +221,34 @@ echtes Sicherheitssystem** – ein Cookie mit einem geteilten Passwort ist trivi
 sobald jemand es kennt. Es ist eine Reibungsbremse gegen zufällige Besucher, keine
 Zugriffskontrolle.
 
+## Rechtliches
+
+Vier eigene Seiten, außerhalb des Passwort-Gates erreichbar (siehe `middleware.ts` – ein
+Impressum darf laut § 5 DDG nicht hinter einer Zugriffssperre verschwinden):
+
+- **`/impressum`** – Pflichtangaben nach § 5 DDG. Enthält `[PLATZHALTER]`-Markierungen für Name,
+  Anschrift und Kontakt der verantwortlichen Person – **muss** vor dem echten öffentlichen Start
+  ausgefüllt werden, siehe BLOCKERS.md.
+- **`/datenschutz`** – Datenschutzerklärung nach Art. 13 DSGVO, beschreibt die tatsächliche
+  Datenverarbeitung (Hosting/Logfiles, das eine technisch notwendige Gate-Cookie, `localStorage`
+  für Geräte-Kennung/Kalibrierung/Spitzname/Avatar, die pro Bell-Runde übertragenen – ausdrücklich
+  **keine Rohaudio-**, nur abgeleiteten – Messwerte, die Melde-Funktion, selbstgehostete
+  Schriftarten). Auch hier ein paar `[PLATZHALTER]` (Kontaktdaten, zuständige Aufsichtsbehörde).
+- **`/nutzungsbedingungen`** – Beta-Status, zulässiges Verhalten, Melde-Konsequenzen,
+  Altersempfehlung, Haftungsausschluss.
+- **`/cookie-einstellungen`** – Übersicht aller lokal gespeicherten Daten plus ein
+  Selbstbedienungs-Button, der `localStorage` und das Gate-Cookie vollständig löscht.
+
+Da KLÄFF ausschließlich technisch notwendige Cookies/`localStorage` verwendet (kein Tracking,
+keine Werbung, keine Analyse-Tools), ist nach § 25 Abs. 2 Nr. 2 TDDDG kein
+Einwilligungs-Consent-Banner mit Ablehnen-Option nötig. `components/CookieNotice.tsx` zeigt
+trotzdem einen einmaligen Transparenz-Hinweis – bewusst nur auf dem Start- und dem
+Gate-Screen, **nicht** global über alle Screens gerendert, weil ein fixes Banner sonst den
+zeitkritischen BELL!-Button während eines Matches verdecken kann (siehe BLOCKERS.md).
+
+Diese Texte sind sorgfältig an den tatsächlichen Code angelehnt, aber **keine Rechtsberatung** –
+der Besitzer wollte sie selbst noch mal durchsehen, siehe Auftrag.
+
 ## Bekannte Grenzen
 
 - Kein echtes Anti-Cheat gegen "Lautsprecher ans Mikro halten" (siehe oben).

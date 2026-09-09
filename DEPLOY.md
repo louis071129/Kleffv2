@@ -51,6 +51,15 @@ unter `branch:` steht (aktuell `claude/klaeff-multiplayer-game-ur6t7v` - dieses 
 beim Start noch keinen `main`-Branch, siehe `PROGRESS.md`) neu (`autoDeployTrigger: commit`) -
 du musst danach nichts mehr manuell anstoßen.
 
+## Rechtstexte vor dem echten öffentlichen Start
+
+Impressum, Datenschutzerklärung, Nutzungsbedingungen und eine Cookie-Übersicht liegen schon unter
+`/impressum`, `/datenschutz`, `/nutzungsbedingungen` und `/cookie-einstellungen` - erreichbar auch
+ohne das Passwort, weil das Impressum gesetzlich nicht hinter einer Zugangssperre stehen darf.
+Bevor der Link über den engen Freundeskreis mit Passwort hinausgeht, unbedingt die mit
+`[PLATZHALTER]` markierten Stellen ausfüllen (echte Anschrift fürs Impressum, zuständige
+Datenschutz-Aufsichtsbehörde) - Details in `README.md` unter "Rechtliches" und in `BLOCKERS.md`.
+
 ## Free-Plan-Hinweis
 
 Auf dem kostenlosen Render-Plan schläft der Service nach ein paar Minuten Inaktivität ein

@@ -8,6 +8,7 @@ const KEYS = {
   calibration: "klaeff:calibration",
   nickname: "klaeff:nickname",
   avatar: "klaeff:avatar",
+  cookieNoticeDismissed: "klaeff:cookie-notice-dismissed",
 } as const;
 
 function safeGet(key: string): string | null {
@@ -24,6 +25,14 @@ function safeSet(key: string, value: string): void {
   } catch {
     // localStorage kann in privaten Tabs/mit deaktiviertem Storage fehlschlagen - dann
     // faellt das Spiel auf In-Memory-Defaults fuer diese Sitzung zurueck.
+  }
+}
+
+function safeRemove(key: string): void {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // s. safeSet - Storage-Zugriff kann fehlschlagen, dann gibt es ohnehin nichts zu loeschen.
   }
 }
 
@@ -84,6 +93,26 @@ export function loadAvatar(): AvatarSeed {
 
 export function saveAvatar(avatar: AvatarSeed): void {
   safeSet(KEYS.avatar, JSON.stringify(avatar));
+}
+
+export function isCookieNoticeDismissed(): boolean {
+  return safeGet(KEYS.cookieNoticeDismissed) === "1";
+}
+
+export function dismissCookieNotice(): void {
+  safeSet(KEYS.cookieNoticeDismissed, "1");
+}
+
+/**
+ * Loescht alle lokal gespeicherten Spieldaten (Selbstbedienung fuer das
+ * Recht auf Loeschung, siehe /cookie-einstellungen und Datenschutzerklaerung
+ * Abschnitt 12). Das Gate-Cookie selbst ist httpOnly und kann daher nicht
+ * per JS geloescht werden - dafuer gibt es einen eigenen Server-Endpunkt.
+ */
+export function clearAllLocalData(): void {
+  for (const key of Object.values(KEYS)) {
+    safeRemove(key);
+  }
 }
 
 export function randomAvatarSeed(): AvatarSeed {

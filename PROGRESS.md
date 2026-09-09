@@ -467,6 +467,49 @@ Blueprint-Import also automatisch anbieten. Siehe BLOCKERS.md.
 Alle 7 E2E-Tests (inkl. der 2 neuen Gate-Tests) und alle 75 Unit-/Integrationstests laufen
 weiterhin grün, `npm run build` ebenfalls (Middleware taucht jetzt im Build-Output auf).
 
+## Nach Phase 9 – Rechtsseiten (Impressum, Datenschutz, Nutzungsbedingungen, Cookies)
+
+Auf Wunsch des Besitzers, der vor dem iPad-Test-Deploy alle Rechtstexte selbst noch prüfen
+wollte: vier neue Seiten plus die dazugehörige Verdrahtung.
+
+- `app/impressum/page.tsx` – Pflichtangaben nach § 5 DDG (Nachfolgeregelung zu § 5 TMG).
+  Betreiber-Pflichtfelder (Name, Anschrift, Kontakt) sind klar als `[PLATZHALTER]` markiert -
+  eine KI darf und kann eine ladungsfähige Anschrift nicht erfinden. Siehe BLOCKERS.md.
+- `app/datenschutz/page.tsx` – Datenschutzerklärung nach Art. 13 DSGVO, inhaltlich am
+  tatsächlichen Code verifiziert (nicht generisch): Hosting/Zugriffslogs (Render, Region
+  Frankfurt, US-Muttergesellschaft), das eine technisch notwendige `klaeff_gate`-Cookie,
+  `localStorage`-Inhalte (Geräte-Kennung, Kalibrierungsprofil, Spitzname, Avatar), die während
+  einer Bell-Runde übertragenen Messwerte (`packages/scoring/src/types.ts`: `peakDbfs`,
+  `rmsDbfs`, `centroidHz`, `flatness` – ausdrücklich **kein** Rohaudio, das Mikrofonsignal
+  verlässt das Gerät nie als Ton), die Melde-/Anti-Cheat-Funktion (`packages/protocol/src/report.ts`:
+  3 Meldungen aus unterschiedlichen Lobbys / 24h-Fenster), selbstgehostete `next/font`-Schriften
+  (kein Laufzeit-Request an Google), keine Analytics/Tracking. Speicherdauer-Tabelle macht
+  explizit, dass es keine Datenbank gibt - alles liegt nur im Arbeitsspeicher des Servers.
+- `app/nutzungsbedingungen/page.tsx` – Beta-Status, zulässiges Verhalten, Melde-Konsequenzen,
+  kein Account, Altersempfehlung (Platzhalter), Haftungsausschluss.
+- `app/cookie-einstellungen/page.tsx` – Übersicht aller lokal gespeicherten Daten plus ein
+  "Alles löschen"-Button (`lib/storage.ts`: neue `clearAllLocalData()`; `app/api/gate/route.ts`:
+  neuer `DELETE`-Handler fürs httpOnly-Cookie, das JS nicht selbst löschen kann).
+- `components/CookieNotice.tsx` – einmaliger Transparenz-Hinweis (kein Consent-Zwang nötig, da
+  ausschließlich technisch notwendige Speicherung, § 25 Abs. 2 Nr. 2 TDDDG). Bewusst nicht global
+  im Root-Layout, sondern nur auf `HomeScreen`/`app/gate/page.tsx` gerendert - ein echter Bug
+  wurde gefunden und behoben, siehe BLOCKERS.md (fixes Banner verdeckte sonst den BELL!-Button).
+- `components/LegalFooter.tsx` – Links zu allen vier Seiten, eingebunden auf `HomeScreen` und
+  dem Gate-Screen (Impressum/Datenschutz müssen laut § 5 DDG auch dort ohne Passwort erreichbar
+  sein - `middleware.ts`-Matcher entsprechend erweitert).
+- `e2e/legal-pages.spec.ts` – neue Tests: alle vier Seiten ohne Gate-Cookie erreichbar, Gate-Screen
+  verlinkt Impressum/Datenschutz, Cookie-Hinweis erscheint einmalig und bleibt nach "Verstanden"
+  dauerhaft weg.
+
+`npm run verify` (75 Unit-/Integrationstests) und die komplette Playwright-Suite (10 Tests,
+alle Projekte inkl. beider iPad-Ausrichtungen) laufen grün, `npm run build` ebenfalls (alle vier
+neuen Seiten werden statisch prerendert).
+
+**Wichtig für den Besitzer:** vor dem echten öffentlichen Start müssen die `[PLATZHALTER]`-Stellen
+in Impressum, Datenschutzerklärung und Nutzungsbedingungen ausgefüllt werden (Name/Anschrift/
+Kontakt, zuständige Aufsichtsbehörde, Mindestalters-Empfehlung). Diese Texte sind sorgfältig
+formuliert, aber keine Rechtsberatung.
+
 ## CI-Endstand dieser Nacht
 
 Der `e2e`-CI-Job war einmal flaky (Race Condition in einem Test selbst, nicht in der App -

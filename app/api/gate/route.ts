@@ -23,3 +23,20 @@ export async function POST(request: Request): Promise<NextResponse> {
   });
   return response;
 }
+
+/**
+ * Loescht das Gate-Cookie wieder. httpOnly-Cookies koennen nicht per
+ * client-seitigem JS entfernt werden, deshalb gibt es dafuer diesen
+ * Endpunkt - genutzt von der Cookie-Einstellungen-Seite als
+ * Selbstbedienungs-Loeschung.
+ */
+export async function DELETE(): Promise<NextResponse> {
+  const response = NextResponse.json({ ok: true });
+  response.cookies.set(GATE_COOKIE_NAME, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    maxAge: 0,
+    path: "/",
+  });
+  return response;
+}

@@ -149,3 +149,39 @@ tatsaechlich wartet) auf den Button der jeweils richtigen Seite gewartet. 3x hin
 lokal gruen nach dem Fix. Lehre: `isVisible()` in Playwright ist ein Sofort-Check, kein
 Warte-Mechanismus - fuer alles Zeitkritische `waitFor`/die eingebauten Auto-Wait-Assertions
 verwenden.
+
+## 2026-09-09 – Rechtsseiten: fehlende Betreiberdaten koennen nicht erfunden werden
+
+Auf Wunsch des Besitzers: Impressum, Datenschutzerklaerung, Nutzungsbedingungen und eine
+Cookie-Einstellungen-Seite ergaenzt (siehe README.md "Rechtliches"). Ein Impressum nach § 5 DDG
+braucht die echte, ladungsfaehige Anschrift der verantwortlichen Person - das kann und darf eine
+KI nicht erfinden (falsche Angaben waeren selbst ein Rechtsverstoss). Entscheidung: alle
+Pflichtfelder mit klar sichtbaren `[PLATZHALTER]`-Markierungen versehen (inkl. eines expliziten
+Hinweiskastens oben auf jeder Seite), Rechtstexte inhaltlich aber vollstaendig und so formuliert,
+dass sie zur tatsaechlichen Datenverarbeitung im Code passen. **Vor dem echten oeffentlichen
+Start muss der Besitzer diese Platzhalter ausfuellen** - der Nutzer hat explizit angekuendigt,
+selbst nochmal ueber alle Rechtstexte zu schauen.
+
+Zusaetzlich zu pruefen/auszufuellen:
+- Impressum: Name, Anschrift, Kontakt.
+- Datenschutz: zustaendige Landesdatenschutz-Aufsichtsbehoerde; aktueller Stand des
+  Auftragsverarbeitungsvertrags mit dem Hosting-Anbieter (Render) vor dem oeffentlichen Start
+  verifizieren - hier wurde bewusst nicht mehr behauptet, als sich aus dem Code und oeffentlich
+  bekannten Fakten (Serverregion Frankfurt aus `render.yaml`, US-Muttergesellschaft) ableiten
+  laesst.
+- Nutzungsbedingungen: konkrete Mindestalters-Empfehlung (Platzhalter mit Vorschlag 12/16 Jahre).
+
+## 2026-09-09 – CookieNotice als globales Fixed-Element blockierte den BELL!-Button
+
+Beim ersten Einbau lag `<CookieNotice />` im Root-Layout (`app/layout.tsx`), damit auf jedem
+Screen sichtbar. Der neue E2E-Test fuer die Rechtsseiten lief zwar gruen, aber der bestehende
+`two-player-match.spec.ts`-Test schlug danach mit einem echten, reproduzierbaren Bug fehl: das
+fixe Banner am unteren Bildschirmrand ueberdeckte in der `MatchScreen`-Ansicht den 🐕-BELL!-Button
+(Playwright meldete "intercepts pointer events", Klick ging ins Leere). Das waere auf einem
+echten iPad beim Spielen genauso passiert - ein zeitkritischer 3-Sekunden-Button darf nie durch
+ein Hinweis-Overlay verdeckt sein. Fix: `CookieNotice` aus dem globalen Layout entfernt und
+stattdessen nur auf den beiden Einstiegs-Screens gerendert, auf denen es inhaltlich hingehoert
+und nichts Zeitkritisches ueberdeckt (`HomeScreen`, `app/gate/page.tsx`) - analog zum bereits
+bestehenden Muster fuer `LegalFooter`. Nach dem Fix: komplette E2E-Suite (10 Tests) wieder gruen.
+Wieder ein Beleg dafuer, dass ein neuer Test nicht nur sich selbst, sondern auch bestehende
+Tests gegen die volle Suite laufen muss, bevor er als "fertig" gilt.

@@ -14,6 +14,9 @@ export function middleware(request: NextRequest): NextResponse {
 
 export const config = {
   matcher: [
-    "/((?!api/health|api/gate|gate|_next/static|_next/image|favicon.ico|icon|apple-icon|manifest.webmanifest|worklets).*)",
+    // Impressum/Datenschutz/Nutzungsbedingungen/Cookie-Einstellungen muessen
+    // gemaess § 5 DDG ohne Passwort erreichbar sein, auch wenn der Rest der
+    // Seite noch nicht oeffentlich ist.
+    "/((?!api/health|api/gate|gate|impressum|datenschutz|nutzungsbedingungen|cookie-einstellungen|_next/static|_next/image|favicon.ico|icon|apple-icon|manifest.webmanifest|worklets).*)",
   ],
 };

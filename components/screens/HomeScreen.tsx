@@ -4,6 +4,8 @@ import { useState } from "react";
 import { Button } from "../Button";
 import { Card } from "../Card";
 import { Avatar } from "../Avatar";
+import { LegalFooter } from "../LegalFooter";
+import { CookieNotice } from "../CookieNotice";
 import { useGameStore } from "../../lib/store/game-store";
 import { randomAvatarSeed } from "../../lib/storage";
 
@@ -85,6 +87,8 @@ export function HomeScreen({ initialCode, onStart }: HomeScreenProps): React.Rea
         Übertragen wird nur dein Lautstärkepegel, niemals Ton. Kein Freitext-Chat - nur ein
         Emote-Rad.
       </p>
+      <LegalFooter />
+      <CookieNotice />
     </main>
   );
 }
