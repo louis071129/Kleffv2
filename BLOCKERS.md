@@ -219,6 +219,21 @@ Entscheidung: bestehende, korrekte 35/27.5/22.5/15-Verteilung beibehalten statt 
 widerspruechlichen neuen Zahlen zu uebernehmen - konservativste Wahl, keine Regression, keine
 neue Inkonsistenz im Herzstueck der Fairness-Mechanik. `packages/scoring` bleibt unveraendert.
 
+## 2026-09-09 – CI-`e2e`-Job kurzzeitig rot zwischen zwei Umbau-Commits
+
+Der Protokoll+Server-Commit des Kläffkarussell-Umbaus (`90913ea`) war lokal per `npm run verify`
+gruen (Lint+Typecheck+Unit-/Integrationstests - das ist die von harter Regel 2 verlangte
+Pruefung), aber der separate CI-`e2e`-Job schlug fehl: die Playwright-Spec-Dateien referenzierten
+zu diesem Zeitpunkt noch die alte Schnellsuche-UI (Button-Text, Zwei-Runden-Match-Annahme), die
+im selben Commit bereits durch die neue Kläffkarussell/Duell-Logik ersetzt worden war - bewusst
+so gesplittet, damit der Protokoll/Server-Commit fuer sich lesbar bleibt (siehe dessen
+Commit-Message: "Kläffkarussell-UI ist ein eigener, folgender Commit"). Der naechste Commit
+(`f1aad8d`) hat die E2E-Suite mit umgebaut; CI ist dort wieder komplett gruen (verify+docker+e2e).
+Ehrlich dokumentiert: `npm run test:e2e` haette auch fuer diesen Zwischen-Commit lokal grün
+gehalten werden koennen (auf Kosten eines noch groesseren Einzelcommits) - im Nachhinein waere
+das sauberer gewesen, auch wenn `npm run verify` (die von der harten Regel explizit genannte
+Pruefung) durchgehend gruen war.
+
 ## 2026-09-09 – Best-of-N spielt immer alle Zyklen durch (Duell/Kläffduell)
 
 "Best of 5" (Duell) bzw. "Best of 3" (Kläffduell-Matchup) koennte entweder "hoert auf, sobald
