@@ -364,3 +364,68 @@ CI-Kontext: der bereits laufende GitHub-Actions-`e2e`-Job (aus Phase 0) schlug b
 dieser Commit läuft. Der `docker`-CI-Job lief in der Zwischenzeit bereits erfolgreich durch
 (siehe Phase-4-Update oben).
 
+## Phase 9 – Doku
+
+Status: abgeschlossen. `README.md` vollständig ausgebaut (Architektur, Fairness-Erklärung mit
+Verweis auf den Fairness-Test, Scoring im Detail, ehrlicher Anti-Cheat-Abschnitt,
+Barrierefreiheit, bekannte Grenzen, Test-Übersicht). Finale Prüfung: kein `any`, kein
+`@ts-ignore`, kein `TODO` im fertigen Code (per `grep` über `packages/ app/ components/ lib/
+server/ scripts/ e2e/` bestätigt), keine `.env`-Datei versehentlich getrackt.
+
+---
+
+# Morgen am iPad zuerst prüfen
+
+Diese Session hatte kein Mikrofon und keinen `RENDER_API_KEY` - alles unten ist mit
+synthetischem Audio und automatisierten Browsern getestet, aber **nicht mit einer echten
+menschlichen Stimme auf echter Hardware**. Das hier sind die fünf Dinge, die zuerst von Hand
+geprüft werden sollten, jeweils mit dem erwarteten Ergebnis.
+
+**Kein Live-Deploy vorhanden** (siehe Phase 4) - Schritt 1 unten ist deshalb der allererste,
+alles andere baut darauf auf. Folge dafür [DEPLOY.md](./DEPLOY.md) (unter 5 Minuten, komplett
+im Safari-Dashboard von Render, kein Terminal nötig).
+
+1. **Deployen und `/api/health` prüfen.**
+   Render-Blueprint verbinden wie in `DEPLOY.md` beschrieben, warten bis der Service "Live"
+   zeigt, dann die Service-URL öffnen.
+   *Erwartet:* Die KLÄFF-Startseite lädt (dunkler Hintergrund, "KLÄFF" in Limette-Grün oben).
+   `<service-url>/api/health` zeigt JSON mit `"status":"ok"` und einer Versionsnummer.
+
+2. **Mikro freigeben und mit echter Stimme kalibrieren.**
+   Auf der Startseite "Schnellsuche" oder "Private Lobby erstellen" antippen, dann "Mikro
+   freigeben" bestätigen (Safari fragt nach Mikrofon-Zugriff), den drei Kalibrierungsschritten
+   folgen (3s still sein, 3s normal sprechen, ein Test-Bell so laut wie im Ernstfall).
+   *Erwartet:* Nach dem Test-Bell erscheint "Kalibriert!" mit einem "Weiter"-Button. Kommt
+   stattdessen "Zu leise", näher ans Mikro gehen und nochmal versuchen - das ist die
+   Ablehnungsschwelle (12 dB Headroom) bei der Arbeit, kein Bug.
+
+3. **Fairness mit zwei echten Geräten testen.**
+   Ein Gerät kalibrieren und *leise* bellen, ein zweites Gerät separat kalibrieren und *laut
+   schreien* (kein Bellen, einfach ein lang gezogener Schrei). Beide in derselben Runde
+   vergleichen.
+   *Erwartet:* Das saubere, knackige (leise) Bellen kann gewinnen - Lautstärke allein
+   entscheidet nicht. Genau das beweist der automatisierte Fairness-Test
+   (`packages/scoring/test/score.test.ts`), das hier ist die Bestätigung mit echten Stimmen
+   statt synthetischem Audio.
+
+4. **Zwei Geräte, private Lobby, komplettes Match.**
+   Auf Gerät A eine private Lobby erstellen, den 6-stelligen Code (oder Link `/j/CODE`) an
+   Gerät B schicken, beitreten lassen, Host tippt "Match starten", beide Runden zu Ende
+   spielen.
+   *Erwartet:* Beide Geräte zeigen am Ende denselben Ergebnis-Screen mit Podium. Das
+   Emote-Rad (unten rechts) funktioniert auf beiden Seiten und zeigt eine Sprechblase über dem
+   Avatar des Senders - kein Freitext nötig oder möglich.
+
+5. **AGC-Hinweis auf echtem iPhone/iPad Safari.**
+   Kalibrierung auf einem echten iOS-Gerät durchlaufen (nicht Simulator).
+   *Erwartet:* Falls Safari die Lautstärke trotz Anfrage automatisch nachregelt (das ist auf
+   iOS keine Seltenheit), erscheint oben ein Hinweis-Badge: "Dein Browser regelt die
+   Lautstärke automatisch nach. Wertung läuft im Ausgleichsmodus." Kommt der Hinweis NICHT,
+   heißt das nur, dass dieses konkrete Gerät die Anfrage tatsächlich respektiert hat - beides
+   ist ein korrektes Ergebnis, kein Fehlerfall.
+
+Playwright-generierte Screenshots (inkl. beider iPad-Ausrichtungen und dem Ergebnis-Screen
+eines echten Zwei-Spieler-Matches mit synthetischem Audio) liegen als Build-Artefakt im
+`e2e`-CI-Job auf GitHub Actions (Tab "Actions" im Repo, neuester erfolgreicher Lauf, Artefakt
+"e2e-artifacts") - nicht im Repo selbst, weil sie bei jedem Lauf neu erzeugt werden.
+
