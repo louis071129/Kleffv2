@@ -52,3 +52,17 @@ von sich aus und bricht beim `next build` mit "Module not found" ab, sobald eine
 `webpack(config)`-Hook mit `resolve.extensionAlias: { ".js": [".ts", ".tsx", ".js"] }` - das
 ist der von Next selbst dokumentierte Weg fuer genau diesen Fall. Kein Codeumbau noetig, betrifft
 nur die Webpack-Konfiguration.
+
+## 2026-09-09 – Docker-Image-Build lokal nicht verifizierbar (Sandbox-Netzwerkrichtlinie)
+
+`docker build` schlaegt in dieser Session fehl: der Docker-Daemon bekommt beim Ziehen von
+`node:22-slim` von Docker Hub ein `403` vom Egress-Proxy fuer `production.cloudfront.docker.com`
+(bestaetigt ueber `/__agentproxy/status`: `connect_rejected`, "policy denial or upstream
+failure"). Das ist eine Organisationsrichtlinie fuer diese Sandbox, kein Fehler im Dockerfile -
+laut Proxy-README ausdruecklich nicht wiederholen oder umgehen, sondern melden. Das Dockerfile
+selbst ist plausibilitaetsgepueft (Syntax, Copy-Reihenfolge, Multi-Stage-Aufbau) und der
+GitHub-Actions-CI-Workflow enthaelt einen `docker build`-Job, der auf einem regulaeren Runner mit
+normalem Internetzugang laufen wird - das ist der Ort, an dem der Image-Build tatsaechlich
+verifiziert wird, sobald CI einmal durchlaeuft. Der Besitzer sollte das morgen als Erstes auf der
+Render-Seite pruefen (Render baut das Image selbst, unabhaengig von dieser Sandbox).
+Siehe PROGRESS.md "Morgen am iPad zuerst pruefen" (folgt in Phase 9).

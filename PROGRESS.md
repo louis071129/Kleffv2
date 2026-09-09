@@ -148,3 +148,39 @@ Ein Build-Bug gefunden und behoben: `next build` scheiterte an den `.js`-Endunge
 relativen Imports (Node-ESM-Konvention). Fix über `webpack.resolve.extensionAlias` in
 `next.config.ts`. Siehe BLOCKERS.md.
 
+## Phase 4 – Deployment
+
+Status: abgeschlossen (vorbereitet), **kein Live-Deploy** - kein `RENDER_API_KEY` in dieser
+Umgebung gesetzt. Der letzte Klick ("Repo in Render verbinden") ist manuell, dauert laut
+`DEPLOY.md` unter 5 Minuten auf dem iPad.
+
+Aufgebaut:
+- `Dockerfile`: Multi-Stage (deps → builder → runner), Node 22 slim, nicht-root User
+  (`klaeff`, uid/gid 1001), Runtime-Image bekommt nur Production-Dependencies
+  (`npm ci --omit=dev`) plus die tatsächlich zur Laufzeit gebrauchten Quellen (`server/`,
+  `packages/*/src`, `.next/`, `app/`, `public/`) - kein Test-/Lint-Tooling im Image.
+  Eingebauter `HEALTHCHECK` gegen `/api/health`.
+- `.dockerignore`: node_modules, .git, .next, Test-Artefakte etc. ausgeschlossen.
+- `render.yaml`: Blueprint für einen Docker-Web-Service, Health-Check-Pfad `/api/health`,
+  `autoDeployTrigger: commit` (deployt automatisch bei jedem Push auf `main`).
+- `fly.toml`: Fallback, falls Render Probleme macht - gleiches Dockerfile, Health-Check auf
+  denselben Pfad.
+- `DEPLOY.md`: Schritt-für-Schritt auf Deutsch, geschrieben für Safari auf dem iPad ohne
+  Terminal (GitHub-Login bei Render, Blueprint verbinden, warten, testen).
+- `.github/workflows/ci.yml` hatte bereits einen `docker build`-Job (aus Phase 0); dessen
+  Trigger war aber auf `push: branches: [main]` beschränkt - da diese Session nie auf `main`
+  pusht (siehe Git-Workflow-Entscheidung oben), wäre CI in dieser Session nie gelaufen. Trigger
+  auf alle Branches erweitert (`on: push` ohne Filter), damit CI die Arbeit tatsächlich
+  mitprüft, während sie entsteht.
+- `server/index.ts`/`package.json`: `PORT` kommt bereits aus `process.env.PORT` (Render-Pflicht),
+  `tsx` von `devDependencies` nach `dependencies` verschoben - der Custom-Server läuft in
+  Produktion direkt aus TypeScript-Quellen (kein separater Kompilierschritt für `server/`), das
+  braucht `tsx` zur Laufzeit im schlanken Produktions-Image.
+
+`docker build` konnte in dieser Sandbox nicht verifiziert werden - der Docker-Daemon bekommt
+beim Ziehen von `node:22-slim` ein `403` von der Egress-Policy dieser Session (bestätigt über
+den Proxy-Status-Endpunkt: Richtlinien-Ablehnung, kein Fehler im Dockerfile). Laut Anweisung
+nicht wiederholt/umgangen, sondern hier dokumentiert. Verifiziert wird das Image entweder über
+den `docker build`-CI-Job (regulärer Runner, normaler Internetzugang) oder direkt bei Render
+selbst beim ersten Deploy. Siehe BLOCKERS.md.
+
