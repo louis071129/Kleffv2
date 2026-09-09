@@ -467,3 +467,17 @@ Blueprint-Import also automatisch anbieten. Siehe BLOCKERS.md.
 Alle 7 E2E-Tests (inkl. der 2 neuen Gate-Tests) und alle 75 Unit-/Integrationstests laufen
 weiterhin grün, `npm run build` ebenfalls (Middleware taucht jetzt im Build-Output auf).
 
+## CI-Endstand dieser Nacht
+
+Der `e2e`-CI-Job war einmal flaky (Race Condition in einem Test selbst, nicht in der App -
+siehe BLOCKERS.md, behoben und 3x hintereinander lokal grün nachgewiesen). Letzter bekannter
+CI-Stand pro Job über die ganze Session:
+
+- **`verify`** (Lint+Typecheck+Test+Build): auf jedem Push seit der Fixture-Korrektur grün.
+- **`docker`** (echter `docker build .` auf einem Runner mit normalem Internetzugang): grün
+  seit Phase 6 auf jedem Push - das Dockerfile ist damit tatsächlich verifiziert, nicht nur
+  plausibilitätsgeprüft (siehe Phase-4-Update oben).
+- **`e2e`** (Playwright, 7 Tests inkl. beider Akzeptanzkriterien): grün auf dem Phase-9-Commit
+  (alle 7 Tests bestanden), ein Flaky-Fund und Fix danach (siehe BLOCKERS.md) - der
+  Passwort-Gate-Commit läuft gerade durch CI, sollte mit dem Fix durchgehend grün sein.
+

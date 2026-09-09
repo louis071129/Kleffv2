@@ -129,3 +129,23 @@ damit fehlgeschlagen oder haette den Service nie automatisch aktuell gehalten. F
 `render.yaml`'s `branch:` auf `claude/klaeff-multiplayer-game-ur6t7v` umgestellt (mit Kommentar
 im File, das bei einem spaeteren Merge nach main zurueckzustellen). Kein Push nach main noetig
 fuer diesen Fix - nur eine Konfigurationsdatei auf dem eigenen Branch geaendert.
+
+## 2026-09-09 – Flaky E2E-Test in CI: Race Condition in two-player-match.spec.ts
+
+Der CI-Lauf fuer den Phase-8-Commit (28fe9cd) schlug im `e2e`-Job fehl, obwohl derselbe Test
+lokal mehrfach gruen lief. Ursache im Test selbst gefunden (kein App-Bug): `two-player-match.spec.ts`
+ermittelte den aktuellen Barker per `page.getByRole(...).isVisible().catch(() => false)` -
+`isVisible()` wartet NICHT (anders als `waitFor`/`click`), sondern prueft den DOM-Zustand im
+selben Tick. Lief der Check, bevor der `ROUND_STARTED`-Broadcast beim Client angekommen war
+(auf einem staerker ausgelasteten CI-Runner wahrscheinlicher als lokal), wurde faelschlich der
+Gast als Barker erkannt obwohl der Host dran war - der Test wartete dann mit vollem
+8s-Timeout auf einen Button, der auf der falschen Seite nie erscheinen wuerde, und lief in
+einen deterministischen Timeout.
+
+Fix: die Rundenreihenfolge ist in `packages/protocol/src/match.ts` exakt die
+Beitrittsreihenfolge - beim Zwei-Spieler-Test also immer erst Host, dann Gast. Kein Erraten
+mehr noetig, direkt in dieser Reihenfolge iteriert und mit `waitFor({state:"visible"})` (das
+tatsaechlich wartet) auf den Button der jeweils richtigen Seite gewartet. 3x hintereinander
+lokal gruen nach dem Fix. Lehre: `isVisible()` in Playwright ist ein Sofort-Check, kein
+Warte-Mechanismus - fuer alles Zeitkritische `waitFor`/die eingebauten Auto-Wait-Assertions
+verwenden.

@@ -19,11 +19,15 @@ test.describe("Zwei-Spieler-Match (private Lobby)", () => {
 
     await host.getByRole("button", { name: "Match starten" }).click();
 
-    // Zwei Runden durchspielen: wer dran ist, sieht den Bell-Button.
-    for (let round = 0; round < 2; round += 1) {
-      const hostTurn = await host.getByRole("button", { name: /BELL!/u }).isVisible().catch(() => false);
-      const barkerPage = hostTurn ? host : guest;
-      await barkerPage.getByRole("button", { name: /BELL!/u }).click({ timeout: 8000 });
+    // Rundenreihenfolge = Beitrittsreihenfolge (siehe packages/protocol/src/match.ts):
+    // Host hat die Lobby erstellt und ist damit zuerst dran, dann der Gast. Explizit
+    // statt per isVisible()-Race erkannt: isVisible() wartet nicht, ist also anfaellig
+    // dafuer, VOR dem ROUND_STARTED-Broadcast auszuwerten und dann auf der falschen
+    // Seite auf einen Button zu warten, der dort nie erscheint (siehe BLOCKERS.md).
+    for (const barkerPage of [host, guest]) {
+      const bellButton = barkerPage.getByRole("button", { name: /BELL!/u });
+      await bellButton.waitFor({ state: "visible", timeout: 15000 });
+      await bellButton.click();
       // Bellfenster dauert 3s, danach kommt das Rundenergebnis.
       await host.waitForTimeout(3500);
     }
