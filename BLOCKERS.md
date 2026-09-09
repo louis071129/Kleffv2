@@ -100,3 +100,19 @@ Bugs gefunden:
 
 Beide durch einen echten Browser-Durchlauf gefunden (Home -> Mikro -> Kalibrierung -> Lobby),
 nicht durch Codelesen - ein guter Beleg dafuer, dass "baut durch" nicht "funktioniert" heisst.
+
+## 2026-09-09 – EmoteWheel-Grid brach zusammen (Tailwind-Utility-Klassen im Dev-Modus)
+
+Beim visuellen Test von Phase 7 (Playwright, echtes headless Chromium) war das Emote-Rad
+sichtbar kaputt: die 8 Buttons stapelten sich winzig und ueberlappend am rechten Bildschirmrand
+statt als 4x2-Raster zu erscheinen, Playwright-Klicks liefen in ein
+"intercepts pointer events"-Timeout. Ursache nicht abschliessend isoliert (Tailwind v4 im
+Next-Dev-Modus injiziert CSS zur Laufzeit statt ueber eine statische Datei, liess sich per
+curl nicht direkt nachpruefen) - vermutlich ein JIT-Erkennungsproblem fuer die Kombination aus
+`grid grid-cols-4` auf einem `motion.div` mit `position:absolute`. Fix: die Popup-Positionierung
+und das Grid komplett auf Inline-Styles umgestellt (`display:grid`,
+`gridTemplateColumns:"repeat(4, 44px)"` etc.) statt auf Tailwind-Utility-Klassen zu vertrauen -
+robuster fuer genau dieses kleine, isolierte Popup. Nach dem Fix per Screenshot verifiziert:
+sauberes 4x2-Raster, Klick auf ein Emote funktioniert, die Sprechblase erscheint korrekt ueber
+dem Avatar. Wieder ein Beleg dafuer, dass visuelles Testen mit echtem Browser Bugs findet, die
+Typecheck/Lint/Build nicht sehen (alle drei waren durchgehend gruen, obwohl das Rad kaputt war).

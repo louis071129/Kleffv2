@@ -278,3 +278,46 @@ Emote-Rad, echte Screen-Shake-Kopplung an den Live-Pegel, WebAudio-Soundeffekte,
 Wertungssprüche. Die Grundstruktur dafür (Avatar-`mouthOpen`-Prop, Publikumsmeter,
 Levels-State im Store) steht bereits.
 
+## Phase 7 – Präsenz und Juice
+
+Status: abgeschlossen. `npm run verify` und `npm run build` grün. Emote-Rad und
+Idle-Animationen wieder mit echtem (headless) Chromium visuell verifiziert - dabei einen
+echten Layout-Bug gefunden und behoben (siehe BLOCKERS.md).
+
+- `app/globals.css`: CSS-Keyframes fürs Idle-Leben (`avatar-blink`, `avatar-ear-twitch`,
+  `avatar-tail-wag`, `avatar-breathe`), jede mit einer `--idle-delay`-CSS-Variable pro
+  Avatar-Instanz. Läuft rein über CSS, wird also automatisch von der bereits in Phase 6
+  gesetzten globalen `prefers-reduced-motion`-Regel stillgelegt - keine zusätzliche JS-Logik
+  nötig.
+- `components/Avatar.tsx`: bekommt jetzt einen eigenen Schwanz (das Kopf-only-Design aus
+  Phase 6 hatte keinen - für "Schwanz wedelt langsam" ergänzt), Ohren/Augen/Schwanz/Atmung
+  animieren unabhängig mit leicht versetzten Verzögerungen aus `idleSeed`, damit Avatare nicht
+  synchron wirken. Neuer `idle`-Prop (Default an) zum Abschalten in z.B. Screenshots/Podium.
+- `components/EmoteWheel.tsx` + `EmoteBubble.tsx`: die 8 festen Emotes aus dem Auftrag
+  (Wau!/Knurr/Schwanzwedeln/Winseln/Applaus/Augenrollen/Herz/Schock), kein Freitext.
+  In Lobby und Match erreichbar. Ausgesendete Emotes erscheinen als Sprechblase über der
+  Avatarkarte des Absenders (`EmoteBubble`, 2.2s sichtbar).
+- `components/screens/MatchScreen.tsx`: Screen-Shake beim eigenen Bellen ist jetzt an den
+  Live-Pegel gekoppelt (Amplitude ∝ `levels[barkerId]`, gedeckelt auf 8px, ausschließlich über
+  `transform`) und respektiert `prefers-reduced-motion` über Framer Motions
+  `useReducedMotion()`-Hook (CSS allein reicht hier nicht, weil die Animation dynamisch aus
+  JS gesteuert wird, nicht über eine CSS-Keyframe-Regel).
+- `lib/audio/sfx.ts`: synthetisierte Soundeffekte über WebAudio (Countdown-Tick,
+  Runden-Start, Rundenergebnis, Sieg-Fanfare, Tap, Emote) - keine Asset-Downloads, eigener
+  kurzlebiger `AudioContext` pro Sound, komplett getrennt von der Mikro-Aufnahme-Pipeline.
+- `lib/haptics.ts`: `navigator.vibrate`-Wrapper mit vordefinierten Mustern
+  (Rundenstart/-ergebnis/Sieg/Tap), scheitert still ohne Unterstützung (iOS Safari hat es
+  z.B. gar nicht).
+- `lib/score-quips.ts`: deutsche Wertungssprüche in fünf Score-Bändern ("LEGENDÄR!" bis
+  "War das ein Bellen?"), reine Show ohne Einfluss auf die Wertung, in `ScoreReveal`
+  eingeblendet.
+- `components/screens/LobbyScreen.tsx`: Melde-Button pro Spieler ergänzt (sendet
+  `REPORT_PLAYER` - die Server-Logik dafür stand schon seit Phase 3).
+
+Bewusste Vereinfachung: der "gelb bei Latenz > 200ms"-Zustand des Verbindungspunkts am
+Halsband aus dem Auftrag ist nicht umgesetzt - das Protokoll hat aktuell keinen Kanal für
+echte Pro-Spieler-Latenz (nur Heartbeat zur Liveness, kein Zeitstempel-Echo). Umgesetzt sind
+grün (verbunden) und grau (getrennt) über das vorhandene `connected`-Feld aus `LOBBY_STATE`/
+`PRESENCE_STATUS`. Eine echte Latenzmessung würde eine Protokolländerung brauchen (Ping mit
+Zeitstempel, Pong-Echo) - ehrlich als Lücke dokumentiert statt eine Zahl vorzutäuschen.
+

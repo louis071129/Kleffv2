@@ -1,10 +1,13 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { Avatar } from "../Avatar";
 import { Button } from "../Button";
 import { Card } from "../Card";
 import { useGameStore } from "../../lib/store/game-store";
+import { sfxWin } from "../../lib/audio/sfx";
+import { HAPTIC_WIN, vibrate } from "../../lib/haptics";
 
 const PODIUM_HEIGHT: Record<number, string> = { 1: "9rem", 2: "6.5rem", 3: "4.5rem" };
 const PODIUM_ORDER = [2, 1, 3];
@@ -13,10 +16,21 @@ export function ResultScreen({ onPlayAgain }: { readonly onPlayAgain: () => void
   const lobby = useGameStore((s) => s.lobby);
   const standings = useGameStore((s) => s.matchStandings);
   const playerId = useGameStore((s) => s.playerId);
+  const announced = useRef(false);
 
   const players = lobby?.players ?? [];
   const podium = (standings ?? []).filter((s) => s.rank <= 3);
   const rest = (standings ?? []).filter((s) => s.rank > 3);
+  const won = podium.find((s) => s.rank === 1)?.playerId === playerId;
+
+  useEffect(() => {
+    if (!announced.current && standings) {
+      announced.current = true;
+      sfxWin();
+      if (won) vibrate(HAPTIC_WIN);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [standings]);
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-lg flex-col items-center gap-6 px-5 py-8">

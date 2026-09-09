@@ -125,6 +125,76 @@ select {
   line-height: 1;
 }
 
+/* Idle-Leben fuer Avatare: jeder Spieler bekommt ueber --idle-delay einen
+   eigenen Rhythmus (aus idleSeed berechnet), damit es nicht synchron wirkt. */
+@keyframes avatar-blink {
+  0%,
+  92%,
+  100% {
+    transform: scaleY(1);
+  }
+  96% {
+    transform: scaleY(0.1);
+  }
+}
+@keyframes avatar-ear-twitch {
+  0%,
+  85%,
+  100% {
+    transform: rotate(0deg);
+  }
+  90% {
+    transform: rotate(-6deg);
+  }
+  93% {
+    transform: rotate(4deg);
+  }
+}
+@keyframes avatar-tail-wag {
+  0%,
+  100% {
+    transform: rotate(-12deg);
+  }
+  50% {
+    transform: rotate(12deg);
+  }
+}
+@keyframes avatar-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.015);
+  }
+}
+
+.avatar-idle-eyes {
+  transform-origin: 50px 52px;
+  animation: avatar-blink 5s ease-in-out infinite;
+  animation-delay: var(--idle-delay, 0s);
+}
+.avatar-idle-ear-l {
+  transform-origin: 20px 30px;
+  animation: avatar-ear-twitch 6s ease-in-out infinite;
+  animation-delay: var(--idle-delay, 0s);
+}
+.avatar-idle-ear-r {
+  transform-origin: 80px 30px;
+  animation: avatar-ear-twitch 6.4s ease-in-out infinite;
+  animation-delay: var(--idle-delay, 0s);
+}
+.avatar-idle-tail {
+  transform-origin: 88px 100px;
+  animation: avatar-tail-wag 1.6s ease-in-out infinite;
+  animation-delay: var(--idle-delay, 0s);
+}
+.avatar-idle-breathe {
+  transform-origin: 50px 60px;
+  animation: avatar-breathe 3.4s ease-in-out infinite;
+  animation-delay: var(--idle-delay, 0s);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

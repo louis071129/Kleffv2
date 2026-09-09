@@ -1,13 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Avatar } from "../Avatar";
 import { Button } from "../Button";
 import { Card } from "../Card";
 import { ScoreReveal } from "../ScoreReveal";
+import { EmoteBubble } from "../EmoteBubble";
+import { EmoteWheel } from "../EmoteWheel";
 import { useGameStore } from "../../lib/store/game-store";
 import { getAudioSession } from "../../lib/audio/session";
+import { sfxRoundResult, sfxRoundStart } from "../../lib/audio/sfx";
+import { HAPTIC_ROUND_RESULT, HAPTIC_ROUND_START, vibrate } from "../../lib/haptics";
+
+const MAX_SHAKE_PX = 8;
 
 export function MatchScreen(): React.ReactElement {
   const lobby = useGameStore((s) => s.lobby);
@@ -16,16 +22,34 @@ export function MatchScreen(): React.ReactElement {
   const lastRoundResult = useGameStore((s) => s.lastRoundResult);
   const levels = useGameStore((s) => s.levels);
   const [barking, setBarking] = useState(false);
+  const reducedMotion = useReducedMotion();
+  const announcedRoundRef = useRef<number | null>(null);
+  const announcedResultRoundRef = useRef<number | null>(null);
 
   const players = lobby?.players ?? [];
   const barkerId = currentRound?.barkerPlayerId ?? null;
   const barker = players.find((p) => p.id === barkerId) ?? null;
   const audience = players.filter((p) => p.id !== barkerId);
   const isMyTurn = barkerId === playerId;
+  const barkerLevel = barker ? (levels[barker.id] ?? 0) : 0;
 
   useEffect(() => {
     setBarking(false);
+    if (currentRound && announcedRoundRef.current !== currentRound.roundIndex) {
+      announcedRoundRef.current = currentRound.roundIndex;
+      sfxRoundStart();
+      if (isMyTurn) vibrate(HAPTIC_ROUND_START);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentRound?.roundIndex]);
+
+  useEffect(() => {
+    if (lastRoundResult && announcedResultRoundRef.current !== lastRoundResult.roundIndex) {
+      announcedResultRoundRef.current = lastRoundResult.roundIndex;
+      sfxRoundResult();
+      vibrate(HAPTIC_ROUND_RESULT);
+    }
+  }, [lastRoundResult]);
 
   async function handleBark(): Promise<void> {
     if (!currentRound) return;
@@ -42,6 +66,8 @@ export function MatchScreen(): React.ReactElement {
       ? Math.round(audience.reduce((sum, p) => sum + (levels[p.id] ?? 0), 0) / audience.length)
       : 0;
 
+  const shakeAmplitude = reducedMotion ? 0 : Math.min(MAX_SHAKE_PX, (barkerLevel / 100) * MAX_SHAKE_PX);
+
   return (
     <main className="mx-auto flex min-h-dvh max-w-lg flex-col items-center gap-6 px-5 py-8">
       <p className="text-xs uppercase tracking-wide text-[var(--muted)]">
@@ -52,14 +78,18 @@ export function MatchScreen(): React.ReactElement {
         {barker && (
           <motion.div
             key={barker.id}
-            className="flex flex-col items-center gap-2"
+            className="relative flex flex-col items-center gap-2"
             animate={
-              isMyTurn && barking
-                ? { x: [0, -2, 2, -3, 3, 0], transition: { duration: 0.3, repeat: Infinity } }
-                : {}
+              isMyTurn && barking && shakeAmplitude > 0.2
+                ? {
+                    x: [0, -shakeAmplitude, shakeAmplitude, -shakeAmplitude * 0.6, 0],
+                    transition: { duration: 0.25, repeat: Infinity },
+                  }
+                : { x: 0 }
             }
           >
-            <Avatar seed={barker.avatar} size={200} mouthOpen={(levels[barker.id] ?? 0) / 100} />
+            <EmoteBubble playerId={barker.id} />
+            <Avatar seed={barker.avatar} size={200} mouthOpen={barkerLevel / 100} />
             <p className="font-display text-2xl">{barker.nickname}</p>
             {isMyTurn && <span className="text-xs text-[var(--lime)]">Du bist dran!</span>}
           </motion.div>
@@ -67,7 +97,8 @@ export function MatchScreen(): React.ReactElement {
 
         <div className="flex flex-wrap justify-center gap-3">
           {audience.map((p) => (
-            <div key={p.id} className="flex flex-col items-center gap-1 opacity-90">
+            <div key={p.id} className="relative flex flex-col items-center gap-1 opacity-90">
+              <EmoteBubble playerId={p.id} />
               <Avatar seed={p.avatar} size={56} mouthOpen={(levels[p.id] ?? 0) / 100} />
               <p className="max-w-[4rem] truncate text-[10px]">{p.nickname}</p>
             </div>
@@ -110,6 +141,10 @@ export function MatchScreen(): React.ReactElement {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <div className="fixed bottom-6 right-5">
+        <EmoteWheel />
+      </div>
     </main>
   );
 }

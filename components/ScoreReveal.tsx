@@ -1,7 +1,9 @@
 "use client";
 
+import { useMemo } from "react";
 import { motion } from "framer-motion";
 import type { BarkScore } from "@klaeff/scoring";
+import { scoreQuip } from "../lib/score-quips";
 
 const COMPONENTS: { key: keyof BarkScore["breakdown"]; label: string; max: number; color: string }[] = [
   { key: "loudness", label: "Lautstärke", max: 50, color: "var(--bark)" },
@@ -17,6 +19,8 @@ const FLAG_LABELS: Record<string, string> = {
 };
 
 export function ScoreReveal({ score, nickname }: { readonly score: BarkScore; readonly nickname: string }): React.ReactElement {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const quip = useMemo(() => scoreQuip(score.total), [score.total, score.peakTimeMs]);
   return (
     <div>
       <p className="text-center text-sm text-[var(--muted)]">{nickname}</p>
@@ -27,6 +31,14 @@ export function ScoreReveal({ score, nickname }: { readonly score: BarkScore; re
         transition={{ delay: 0.6, type: "spring", stiffness: 320, damping: 24 }}
       >
         {Math.round(score.total)}
+      </motion.p>
+      <motion.p
+        className="text-center text-sm font-semibold text-[var(--bark)]"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.8 }}
+      >
+        {quip}
       </motion.p>
       <div className="mt-3 space-y-2">
         {COMPONENTS.map((c, i) => {

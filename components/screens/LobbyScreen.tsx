@@ -4,6 +4,8 @@ import { Avatar } from "../Avatar";
 import { Button } from "../Button";
 import { Card } from "../Card";
 import { ConnectionDot } from "../ConnectionDot";
+import { EmoteBubble } from "../EmoteBubble";
+import { EmoteWheel } from "../EmoteWheel";
 import { useGameStore } from "../../lib/store/game-store";
 import { getKlaeffClient } from "../../lib/ws-client";
 
@@ -56,6 +58,7 @@ export function LobbyScreen({ onLeave }: { readonly onLeave: () => void }): Reac
         {lobby.players.map((player) => (
           <Card key={player.id} className="flex flex-col items-center gap-1 py-3" shadowColor="var(--bark)">
             <div className="relative">
+              <EmoteBubble playerId={player.id} />
               <Avatar seed={player.avatar} size={64} mouthOpen={(levels[player.id] ?? 0) / 100} />
               <span
                 className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-[var(--ink)]"
@@ -64,14 +67,25 @@ export function LobbyScreen({ onLeave }: { readonly onLeave: () => void }): Reac
             </div>
             <p className="max-w-[6rem] truncate text-sm font-semibold">{player.nickname}</p>
             {player.isHost && <span className="text-[10px] uppercase text-[var(--violet)]">Host</span>}
-            {isHost && player.id !== playerId && (
-              <button
-                type="button"
-                className="text-[10px] text-[var(--pink)] underline"
-                onClick={() => getKlaeffClient().send({ type: "LOBBY_KICK", targetPlayerId: player.id })}
-              >
-                Kicken
-              </button>
+            {player.id !== playerId && (
+              <div className="flex gap-2">
+                {isHost && (
+                  <button
+                    type="button"
+                    className="text-[10px] text-[var(--pink)] underline"
+                    onClick={() => getKlaeffClient().send({ type: "LOBBY_KICK", targetPlayerId: player.id })}
+                  >
+                    Kicken
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="text-[10px] text-[var(--muted)] underline"
+                  onClick={() => getKlaeffClient().send({ type: "REPORT_PLAYER", targetPlayerId: player.id })}
+                >
+                  Melden
+                </button>
+              </div>
             )}
           </Card>
         ))}
@@ -97,6 +111,10 @@ export function LobbyScreen({ onLeave }: { readonly onLeave: () => void }): Reac
       <Button type="button" variant="secondary" className="w-full" onClick={onLeave}>
         Lobby verlassen
       </Button>
+
+      <div className="fixed bottom-6 right-5">
+        <EmoteWheel />
+      </div>
     </main>
   );
 }

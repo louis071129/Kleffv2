@@ -134,14 +134,28 @@ export interface AvatarProps {
   readonly mouthOpen?: number;
   readonly className?: string;
   readonly title?: string;
+  /** Blinzeln/Ohrenzucken/Schwanzwedeln/Atmen - standardmaessig an, respektiert prefers-reduced-motion global. */
+  readonly idle?: boolean;
 }
 
-export function Avatar({ seed, size = 96, mouthOpen = 0.15, className, title }: AvatarProps): React.ReactElement {
+export function Avatar({
+  seed,
+  size = 96,
+  mouthOpen = 0.15,
+  className,
+  title,
+  idle = true,
+}: AvatarProps): React.ReactElement {
   const headPath = HEAD_PATHS[seed.headShape % HEAD_PATHS.length] ?? HEAD_PATHS[0]!;
   const ears = EAR_SHAPES[seed.ears % EAR_SHAPES.length] ?? EAR_SHAPES[0]!;
   const furColor = FUR_COLORS[seed.furColor % FUR_COLORS.length] ?? FUR_COLORS[0]!;
   const collarColor = COLLAR_COLORS[seed.collarColor % COLLAR_COLORS.length] ?? COLLAR_COLORS[0]!;
   const mouthHeight = 4 + mouthOpen * 20;
+  // Verschiedene Verzoegerungen pro Idle-Animation aus demselben Seed, damit
+  // Blinzeln/Ohren/Schwanz nicht im Gleichtakt laufen.
+  const delayBase = (seed.idleSeed % 4000) / 1000;
+  const idleStyle = (offset: number): React.CSSProperties =>
+    idle ? ({ ["--idle-delay" as string]: `${(delayBase + offset).toFixed(2)}s` } as React.CSSProperties) : {};
 
   return (
     <svg
@@ -152,35 +166,59 @@ export function Avatar({ seed, size = 96, mouthOpen = 0.15, className, title }: 
       role="img"
       aria-label={title ?? "Hunde-Avatar"}
     >
-      <path d={ears.l} fill={furColor} stroke="#0B0A0F" strokeWidth="3" strokeLinejoin="round" />
-      <path d={ears.r} fill={furColor} stroke="#0B0A0F" strokeWidth="3" strokeLinejoin="round" />
-      <path d={headPath} fill={furColor} stroke="#0B0A0F" strokeWidth="4" strokeLinejoin="round" />
-
-      {seed.furPattern === 1 && (
-        <g fill="#0B0A0F" opacity="0.25">
-          <circle cx="30" cy="30" r="5" />
-          <circle cx="66" cy="24" r="4" />
-          <circle cx="72" cy="60" r="6" />
+      <g className={idle ? "avatar-idle-breathe" : undefined} style={idleStyle(0)}>
+        <path
+          d="M84 100c8 4 12 14 6 20-6-2-12-10-14-18Z"
+          fill={furColor}
+          stroke="#0B0A0F"
+          strokeWidth="3"
+          strokeLinejoin="round"
+          className={idle ? "avatar-idle-tail" : undefined}
+          style={idleStyle(0.3)}
+        />
+        <g className={idle ? "avatar-idle-ear-l" : undefined} style={idleStyle(0.6)}>
+          <path d={ears.l} fill={furColor} stroke="#0B0A0F" strokeWidth="3" strokeLinejoin="round" />
         </g>
-      )}
-      {seed.furPattern === 2 && (
-        <g stroke="#0B0A0F" strokeWidth="3" opacity="0.25">
-          <path d="M14 40h20M18 56h24M60 30h26M64 66h22" />
+        <g className={idle ? "avatar-idle-ear-r" : undefined} style={idleStyle(0.9)}>
+          <path d={ears.r} fill={furColor} stroke="#0B0A0F" strokeWidth="3" strokeLinejoin="round" />
         </g>
-      )}
-      {seed.furPattern === 3 && <path d="M0 70h100v38H0Z" fill="#F4EFE4" opacity="0.35" />}
+        <path d={headPath} fill={furColor} stroke="#0B0A0F" strokeWidth="4" strokeLinejoin="round" />
 
-      {eyesForStyle(seed.eyes)}
+        {seed.furPattern === 1 && (
+          <g fill="#0B0A0F" opacity="0.25">
+            <circle cx="30" cy="30" r="5" />
+            <circle cx="66" cy="24" r="4" />
+            <circle cx="72" cy="60" r="6" />
+          </g>
+        )}
+        {seed.furPattern === 2 && (
+          <g stroke="#0B0A0F" strokeWidth="3" opacity="0.25">
+            <path d="M14 40h20M18 56h24M60 30h26M64 66h22" />
+          </g>
+        )}
+        {seed.furPattern === 3 && <path d="M0 70h100v38H0Z" fill="#F4EFE4" opacity="0.35" />}
 
-      {/* Schnauze */}
-      <ellipse cx="50" cy="70" rx={18 + seed.snout * 2} ry="14" fill="#F4EFE4" stroke="#0B0A0F" strokeWidth="3" />
-      <rect x="44" y={64 - mouthHeight / 2} width="12" height={mouthHeight} rx="5" fill="#0B0A0F" data-avatar-mouth="true" />
+        <g className={idle ? "avatar-idle-eyes" : undefined} style={idleStyle(1.4)}>
+          {eyesForStyle(seed.eyes)}
+        </g>
 
-      {/* Halsband */}
-      <path d="M14 96q36 16 72 0" stroke={collarColor} strokeWidth="10" fill="none" strokeLinecap="round" />
-      <circle cx="50" cy="102" r="5" fill={COLLAR_COLORS[(seed.collarCharm + 3) % COLLAR_COLORS.length]} stroke="#0B0A0F" strokeWidth="2" />
+        {/* Schnauze */}
+        <ellipse cx="50" cy="70" rx={18 + seed.snout * 2} ry="14" fill="#F4EFE4" stroke="#0B0A0F" strokeWidth="3" />
+        <rect x="44" y={64 - mouthHeight / 2} width="12" height={mouthHeight} rx="5" fill="#0B0A0F" data-avatar-mouth="true" />
 
-      {accessoryOverlay(seed.accessory)}
+        {/* Halsband */}
+        <path d="M14 96q36 16 72 0" stroke={collarColor} strokeWidth="10" fill="none" strokeLinecap="round" />
+        <circle
+          cx="50"
+          cy="102"
+          r="5"
+          fill={COLLAR_COLORS[(seed.collarCharm + 3) % COLLAR_COLORS.length]}
+          stroke="#0B0A0F"
+          strokeWidth="2"
+        />
+
+        {accessoryOverlay(seed.accessory)}
+      </g>
     </svg>
   );
 }
