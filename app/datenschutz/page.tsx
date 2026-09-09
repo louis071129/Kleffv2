@@ -40,9 +40,16 @@ export default function DatenschutzPage(): React.ReactElement {
             <strong>nicht</strong> von Google-Servern nachgeladen.
           </li>
           <li>
-            Das Mikrofonsignal verlässt dein Gerät nie als Ton – nur lokal
-            berechnete Lautstärke-/Klangwerte werden während einer aktiven
-            Runde an den Server übertragen.
+            Im <strong>Kläffkarussell</strong> (Zufalls-Matchmaking mit
+            Fremden) verlässt dein Mikrofonsignal dein Gerät nie als Ton –
+            nur lokal berechnete Lautstärke-/Klangwerte, aus denen andere
+            einen computergenerierten Bell-Sound hören.
+          </li>
+          <li>
+            In <strong>privaten Lobbys</strong> (nur mit Leuten, die du
+            einlädst) läuft standardmäßig echter, unveränderter Ton – vom
+            Lobby-Host jederzeit auf den Bell-Sound umschaltbar. Details in
+            Abschnitt 6.
           </li>
           <li>Keine Datenbank: alle Spieldaten liegen nur im Arbeitsspeicher des Servers.</li>
         </ul>
@@ -156,26 +163,59 @@ export default function DatenschutzPage(): React.ReactElement {
       <section>
         <h2>6. Datenverarbeitung während einer Spielrunde</h2>
         <p>
-          Sobald du eine Lobby erstellst, beitrittst oder an der Schnellsuche
-          teilnimmst, baut dein Browser eine WebSocket-Verbindung zu unserem
-          Server auf. Dabei werden übertragen: dein Spitzname, deine
-          Avatar-Konfiguration und deine Geräte-Kennung (siehe Abschnitt 5).
+          Sobald du eine Lobby erstellst, beitrittst oder im Kläffkarussell
+          nach einem Gegner suchst, baut dein Browser eine
+          WebSocket-Verbindung zu unserem Server auf. Dabei werden
+          übertragen: dein Spitzname, deine Avatar-Konfiguration und deine
+          Geräte-Kennung (siehe Abschnitt 5).
         </p>
         <p>
-          Während der 3-sekündigen Bell-Runde überträgt dein Browser zusätzlich
-          bis zu 200 kleine Messwert-Pakete: einen Zeitstempel sowie aus dem
+          Während der 3-sekündigen Bell-Runde überträgt dein Browser
+          <strong> immer</strong>, unabhängig vom Modus, bis zu 200 kleine
+          Messwert-Pakete live in Echtzeit: einen Zeitstempel sowie aus dem
           Mikrofonsignal <strong>lokal in deinem Browser</strong> berechnete
           Kennzahlen (Lautstärke-Spitzenwert und -Effektivwert in dBFS,
-          spektraler Schwerpunkt, spektrale Flachheit). Es wird zu keinem
-          Zeitpunkt Ton, eine Tonaufnahme oder eine Wellenform übertragen,
-          gespeichert oder an andere Spieler:innen weitergegeben – das
-          Mikrofonsignal verlässt dein Gerät nie als hörbarer Ton. Zweck dieser
-          Übertragung ist die serverseitige, manipulationssichere Berechnung
-          deines Bell-Scores, damit kein Client sich selbst eine bessere
-          Punktzahl zuweisen kann. Rechtsgrundlage ist Art. 6 Abs. 1 lit. b
-          DSGVO (Durchführung des von dir gestarteten Spiels) bzw. lit. f
-          (berechtigtes Interesse an fairem, manipulationssicherem Scoring).
+          spektraler Schwerpunkt, spektrale Flachheit). Zweck ist die
+          serverseitige, manipulationssichere Berechnung deines Bell-Scores
+          (Art. 6 Abs. 1 lit. b DSGVO, Durchführung des von dir gestarteten
+          Spiels, bzw. lit. f, berechtigtes Interesse an fairem Scoring) und –
+          nur wenn relevant – die Live-Wiedergabe des computergenerierten
+          Bell-Sounds beim Gegner (dazu gleich mehr). Diese Messwerte sind
+          <strong> keine Tonaufnahme</strong> und lassen sich nicht in Sprache
+          zurückverwandeln.
         </p>
+        <p>
+          Was <strong>zusätzlich</strong> passiert, hängt vom Modus ab:
+        </p>
+        <ul>
+          <li>
+            <strong>Kläffkarussell</strong> (Zufalls-Matchmaking mit Fremden):
+            Es wird zu keinem Zeitpunkt Ton, eine Tonaufnahme oder eine
+            Wellenform übertragen, gespeichert oder weitergegeben – dein
+            Mikrofonsignal verlässt dein Gerät nie als hörbarer Ton. Der
+            Gegner hört stattdessen einen aus den obigen Messwerten lokal in
+            seinem Browser synthetisierten Bell-Sound. Das ist eine
+            Sicherheitsgrenze dieses Modus, siehe auch{" "}
+            <a href="/nutzungsbedingungen">Nutzungsbedingungen</a>.
+          </li>
+          <li>
+            <strong>Private Lobby</strong> (nur mit Leuten, die du
+            einlädst): Hier läuft <strong>standardmäßig echter Ton</strong>.
+            Dein Browser nimmt das 3-Sekunden-Bellfenster komprimiert auf
+            (WebM/Opus, niedrige Bitrate) und schickt die Aufnahme an den
+            Server, der sie unverändert an alle anderen Mitglieder{" "}
+            <strong>derselben Lobby</strong> weiterleitet – zur Wiedergabe,
+            nicht zur Wertung (die läuft ausschließlich über die Messwerte
+            oben). Der Server speichert die Aufnahme zu keinem Zeitpunkt,
+            auch nicht kurzzeitig: er reicht sie beim Empfang direkt weiter
+            und behält keine Kopie. Der Host kann „Echter Ton“ in den
+            Lobby-Einstellungen jederzeit für alle abschalten – dann läuft
+            auch dort der Bell-Sound wie im Kläffkarussell. Unterstützt dein
+            Browser die nötige Aufnahmefunktion nicht (z. B. manche
+            Safari-Versionen), wird für dich automatisch nur das Scoring
+            übertragen, ohne dass andere deine Stimme hören.
+          </li>
+        </ul>
         <p>
           Diese Daten werden ausschließlich im Arbeitsspeicher des Servers für
           die Dauer der Verbindung bzw. des laufenden Matches verarbeitet. Es
@@ -192,11 +232,11 @@ export default function DatenschutzPage(): React.ReactElement {
           melden. Eine Meldung wird zusammen mit der Geräte-Kennung (Abschnitt
           5) des gemeldeten Geräts, dem Zeitpunkt und der Lobby für eine
           begrenzte Zeit im Arbeitsspeicher des Servers vorgehalten. Bei
-          mehreren Meldungen wird das betroffene Gerät zeitweise von der
-          <strong> öffentlichen</strong> Schnellsuche ausgeschlossen; private
-          Lobbys sind davon nicht betroffen. Zweck ist ein faires,
-          belästigungsfreies Spielumfeld (Art. 6 Abs. 1 lit. f DSGVO). Auch
-          diese Daten werden nicht dauerhaft/in einer Datenbank gespeichert.
+          mehreren Meldungen wird das betroffene Gerät zeitweise vom
+          <strong> Kläffkarussell</strong> ausgeschlossen; private Lobbys sind
+          davon nicht betroffen. Zweck ist ein faires, belästigungsfreies
+          Spielumfeld (Art. 6 Abs. 1 lit. f DSGVO). Auch diese Daten werden
+          nicht dauerhaft/in einer Datenbank gespeichert.
         </p>
       </section>
 
@@ -261,6 +301,14 @@ export default function DatenschutzPage(): React.ReactElement {
               <td>Audio-Messwerte einer Bell-Runde</td>
               <td>Arbeitsspeicher des Servers</td>
               <td>nur während der Auswertung der jeweiligen Runde</td>
+            </tr>
+            <tr>
+              <td>Echter-Ton-Aufnahme (nur private Lobby, wenn aktiv)</td>
+              <td>Arbeitsspeicher des Servers</td>
+              <td>
+                keine – wird beim Empfang direkt weitergereicht, nie
+                gespeichert
+              </td>
             </tr>
             <tr>
               <td>Meldungen (Anti-Cheat)</td>

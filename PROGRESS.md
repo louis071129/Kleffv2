@@ -376,10 +376,12 @@ server/ scripts/ e2e/` bestätigt), keine `.env`-Datei versehentlich getrackt.
 
 # Morgen am iPad zuerst prüfen
 
-Diese Session hatte kein Mikrofon und keinen `RENDER_API_KEY` - alles unten ist mit
-synthetischem Audio und automatisierten Browsern getestet, aber **nicht mit einer echten
-menschlichen Stimme auf echter Hardware**. Das hier sind die fünf Dinge, die zuerst von Hand
-geprüft werden sollten, jeweils mit dem erwarteten Ergebnis.
+**Aktualisiert nach dem Kläffkarussell-Umbau** (siehe Abschnitt weiter unten) - die App hat
+jetzt zwei grundverschiedene Modi statt einer Schnellsuche. Diese Session hatte kein Mikrofon
+und keinen `RENDER_API_KEY` - alles unten ist mit synthetischem Audio und automatisierten
+Browsern getestet, aber **nicht mit einer echten menschlichen Stimme auf echter Hardware**.
+Das hier sind die wichtigsten Dinge, die zuerst von Hand geprüft werden sollten, jeweils mit
+dem erwarteten Ergebnis.
 
 **Kein Live-Deploy vorhanden** (siehe Phase 4) - Schritt 1 unten ist deshalb der allererste,
 alles andere baut darauf auf. Folge dafür [DEPLOY.md](./DEPLOY.md) (unter 5 Minuten, komplett
@@ -387,47 +389,58 @@ im Safari-Dashboard von Render, kein Terminal nötig).
 
 1. **Deployen und `/api/health` prüfen.**
    Render-Blueprint verbinden wie in `DEPLOY.md` beschrieben, warten bis der Service "Live"
-   zeigt, dann die Service-URL öffnen.
-   *Erwartet:* Die KLÄFF-Startseite lädt (dunkler Hintergrund, "KLÄFF" in Limette-Grün oben).
-   `<service-url>/api/health` zeigt JSON mit `"status":"ok"` und einer Versionsnummer.
+   zeigt, dann die Service-URL öffnen (Passwort-Gate: `lars`, siehe DEPLOY.md).
+   *Erwartet:* Die KLÄFF-Startseite lädt (dunkler Hintergrund, "KLÄFF" in Limette-Grün oben,
+   zwei Buttons "🎠 Kläffkarussell" und "🔒 Private Lobby erstellen"). `<service-url>/api/health`
+   zeigt JSON mit `"status":"ok"`, einer Versionsnummer und `carouselQueueSize`.
 
 2. **Mikro freigeben und mit echter Stimme kalibrieren.**
-   Auf der Startseite "Schnellsuche" oder "Private Lobby erstellen" antippen, dann "Mikro
-   freigeben" bestätigen (Safari fragt nach Mikrofon-Zugriff), den drei Kalibrierungsschritten
-   folgen (3s still sein, 3s normal sprechen, ein Test-Bell so laut wie im Ernstfall).
+   Auf der Startseite "🎠 Kläffkarussell" oder "🔒 Private Lobby erstellen" antippen, dann
+   "Mikro freigeben" bestätigen (Safari fragt nach Mikrofon-Zugriff), den drei
+   Kalibrierungsschritten folgen (3s still sein, 3s normal sprechen, ein Test-Bell so laut wie
+   im Ernstfall).
    *Erwartet:* Nach dem Test-Bell erscheint "Kalibriert!" mit einem "Weiter"-Button. Kommt
    stattdessen "Zu leise", näher ans Mikro gehen und nochmal versuchen - das ist die
    Ablehnungsschwelle (12 dB Headroom) bei der Arbeit, kein Bug.
 
-3. **Fairness mit zwei echten Geräten testen.**
+3. **Kläffkarussell: zwei Geräte, Bark-Synth statt echter Stimme.**
+   Auf zwei Geräten (oder einem Gerät + iPad-Freund) "Kläffkarussell" starten, kalibrieren.
+   *Erwartet:* Beide werden sofort gepaart (kein Countdown, kein Warten auf mehr Spieler). Beim
+   Bellen des Gegners ist ein synthetischer, hundeartiger "Wuff"-Sound zu hören, der der
+   Lautstärke/Tonhöhe der Gegner-Stimme grob folgt - **niemals die echte Stimme des Gegners**.
+   Nach dem Ergebnis "Nächster Gegner" antippen -> neue Begegnung, ohne erneute Kalibrierung.
+
+4. **Private Lobby: echter Ton kommt wirklich an.**
+   Gerät A: private Lobby erstellen ("Echter Ton" steht in den Host-Einstellungen auf "An"),
+   Code/Link an Gerät B, beitreten, "Match starten" (bei 2 Spielern automatisch Duell,
+   Best-of-5 = 10 Bell-Runden - dauert eine Weile, das ist gewollt).
+   *Erwartet:* Wenn Gerät A bellt, hört Gerät B die **echte, unveränderte Aufnahme** von A (mit
+   spürbarer, aber kurzer Latenz) - nicht den Bark-Synth. Am Ende zeigt das Ergebnis den
+   Duell-Ausgang (Rundensiege, nicht nur ein einzelner Score).
+
+5. **Fairness mit zwei echten Geräten testen.**
    Ein Gerät kalibrieren und *leise* bellen, ein zweites Gerät separat kalibrieren und *laut
    schreien* (kein Bellen, einfach ein lang gezogener Schrei). Beide in derselben Runde
-   vergleichen.
+   vergleichen (z. B. im Kläffkarussell).
    *Erwartet:* Das saubere, knackige (leise) Bellen kann gewinnen - Lautstärke allein
    entscheidet nicht. Genau das beweist der automatisierte Fairness-Test
    (`packages/scoring/test/score.test.ts`), das hier ist die Bestätigung mit echten Stimmen
    statt synthetischem Audio.
 
-4. **Zwei Geräte, private Lobby, komplettes Match.**
-   Auf Gerät A eine private Lobby erstellen, den 6-stelligen Code (oder Link `/j/CODE`) an
-   Gerät B schicken, beitreten lassen, Host tippt "Match starten", beide Runden zu Ende
-   spielen.
-   *Erwartet:* Beide Geräte zeigen am Ende denselben Ergebnis-Screen mit Podium. Das
-   Emote-Rad (unten rechts) funktioniert auf beiden Seiten und zeigt eine Sprechblase über dem
-   Avatar des Senders - kein Freitext nötig oder möglich.
+6. **AGC-Hinweis auf echtem iPhone/iPad Safari + Kläffduell/Rudel mit mehr Spielern.**
+   Kalibrierung auf einem echten iOS-Gerät durchlaufen (nicht Simulator); falls genug Leute da
+   sind, in einer privaten Lobby mit 3+ Spielern einmal "Kläffduell" und einmal "Rudel"
+   ausprobieren.
+   *Erwartet:* Falls Safari die Lautstärke trotz Anfrage automatisch nachregelt, erscheint oben
+   ein Hinweis-Badge ("Wertung läuft im Ausgleichsmodus"). Kläffduell endet nach ein paar K.-o.-
+   Runden mit einem Champion; Rudel spielt alle Spieler dreimal nacheinander durch und rankt
+   nach Punkte-Summe.
 
-5. **AGC-Hinweis auf echtem iPhone/iPad Safari.**
-   Kalibrierung auf einem echten iOS-Gerät durchlaufen (nicht Simulator).
-   *Erwartet:* Falls Safari die Lautstärke trotz Anfrage automatisch nachregelt (das ist auf
-   iOS keine Seltenheit), erscheint oben ein Hinweis-Badge: "Dein Browser regelt die
-   Lautstärke automatisch nach. Wertung läuft im Ausgleichsmodus." Kommt der Hinweis NICHT,
-   heißt das nur, dass dieses konkrete Gerät die Anfrage tatsächlich respektiert hat - beides
-   ist ein korrektes Ergebnis, kein Fehlerfall.
-
-Playwright-generierte Screenshots (inkl. beider iPad-Ausrichtungen und dem Ergebnis-Screen
-eines echten Zwei-Spieler-Matches mit synthetischem Audio) liegen als Build-Artefakt im
-`e2e`-CI-Job auf GitHub Actions (Tab "Actions" im Repo, neuester erfolgreicher Lauf, Artefakt
-"e2e-artifacts") - nicht im Repo selbst, weil sie bei jedem Lauf neu erzeugt werden.
+Playwright-generierte Screenshots (inkl. beider iPad-Ausrichtungen, dem Kläffkarussell-
+Re-Pairing und dem Ergebnis-Screen eines Zwei-Spieler-Duells mit synthetischem Audio) liegen
+als Build-Artefakt im `e2e`-CI-Job auf GitHub Actions (Tab "Actions" im Repo, neuester
+erfolgreicher Lauf, Artefakt "e2e-artifacts") - nicht im Repo selbst, weil sie bei jedem Lauf
+neu erzeugt werden.
 
 ## Nach Phase 9 – Passwort-Gate ("Bald verfügbar")
 
@@ -523,4 +536,47 @@ CI-Stand pro Job über die ganze Session:
 - **`e2e`** (Playwright, 7 Tests inkl. beider Akzeptanzkriterien): grün auf dem Phase-9-Commit
   (alle 7 Tests bestanden), ein Flaky-Fund und Fix danach (siehe BLOCKERS.md) - der
   Passwort-Gate-Commit läuft gerade durch CI, sollte mit dem Fix durchgehend grün sein.
+
+## Kläffkarussell-Umbau (zweiter Auftrag, nach dem Live-Test-Deploy)
+
+Ein zweiter, deutlich größerer Auftrag kam rein: KLÄFF von "Schnellsuche + private Lobby, beide
+mit reinem Messwert-Scoring ohne Ton-Übertragung" auf zwei grundverschiedene Modi umbauen -
+**Kläffkarussell** (Dauer-1v1-Matchmaking mit Fremden, nie echte Stimme, stattdessen ein
+live client-seitig synthetisierter Bark-Sound) und **Private Lobby** (jetzt mit echter,
+unveränderter Tonübertragung, flexible Spielerzahl 2-8, Duell/Kläffduell/Rudel-Modi). Git-
+Workflow-Konflikt und die eine gestellte Rückfrage: siehe BLOCKERS.md. Der Umbau lief in vier
+großen, jeweils grün committeten und gepushten Schritten:
+
+1. **`packages/bark-synth`** (neu): framework-freie Mapping-Mathematik (Tonhöhe komprimiert auf
+   200-900Hz, Lautstärke, Attack-Schärfe aus dem Frame-Verlauf). `packages/scoring` bewusst
+   unverändert gelassen (AGC-Punkteverteilung des neuen Auftrags ist in sich widersprüchlich,
+   siehe BLOCKERS.md) - fast der gesamte restliche Scoring-Teil des neuen Auftrags war schon
+   exakt das, was bereits gebaut war.
+2. **Protokoll + Server**: `packages/protocol/src/carousel.ts` (reine Warteschlange statt
+   Lobby-Modell, sofortiges Pairing, kein Countdown) ersetzt die alte Schnellsuche komplett;
+   `match.ts` um `computeDuelStandings`/`computeAggregateStandings` erweitert; `bracket.ts`
+   (neu) für das Kläffduell-K.-o.-System. `server/game-server.ts` orchestriert alles inkl.
+   Live-Frame-Relay (`BARK_FRAME`/`BARK_FRAME_BROADCAST`) und Audio-Blob-Relay
+   (`AUDIO_BLOB_SUBMIT`/`AUDIO_BLOB_BROADCAST`, nie serverseitig gespeichert). 119 Tests.
+3. **Client-Audio + UI**: `lib/audio/recorder.ts` (MediaRecorder-Wrapper mit stillem Fallback
+   bei fehlendem Codec-Support), `lib/audio/bark-synth-voice.ts` (Web-Audio-Renderer für den
+   Bark-Synth beim Empfänger). Neue `CarouselQueueScreen`, MatchScreen/ResultScreen/LobbyScreen
+   für beide Modi angepasst (Host-Einstellungen: Spielerzahl, Modus, Echter-Ton-Toggle). E2E-
+   Suite auf die zwei geforderten Akzeptanzkriterien umgebaut
+   (`e2e/carousel-rematch.spec.ts`, `e2e/two-player-match.spec.ts` jetzt als Duell).
+4. **Diese Doku-Aktualisierung**: README.md (Architektur/Spielablauf/Matchmaking/Tests-
+   Abschnitte), Datenschutzerklärung (Abschnitt 6 musste korrigiert werden - "kein Rohton"
+   stimmt nur noch fürs Kläffkarussell, private Lobbys übertragen jetzt standardmäßig echten
+   Ton), Nutzungsbedingungen, MicPermissionScreen-Text, dieser Abschnitt und die "Morgen am
+   iPad"-Checkliste oben.
+
+Mehrere bewusste Vereinfachungen unter Zeitdruck, ehrlich in BLOCKERS.md dokumentiert statt
+stillschweigend: Best-of-N spielt immer alle Zyklen durch (kein vorzeitiges Ende), Rudel-
+Interpretation (3 Zyklen durch alle Spieler), keine serverseitige Audio-Blob-Zwischenspeicherung
+(strenger als gefordert, nicht schwächer), MediaRecorder-Fallback zeigt nur einen Hinweistext
+statt die Gegenseite pro Runde dynamisch umzuschalten, Rudel/Kläffduell nur auf Protokoll-/
+Server-Ebene statt zusätzlich per Browser-E2E getestet.
+
+`npm run verify`, `npm run build` und die komplette Playwright-Suite (10 Tests) sind nach jedem
+der vier Schritte grün gewesen, kein Commit war rot.
 

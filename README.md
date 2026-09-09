@@ -1,9 +1,17 @@
 # KLÄFF
 
-Multiplayer-Bell-Wettkampf im Browser. Spieler treten gegeneinander an, indem sie
-nacheinander drei Sekunden ins Mikrofon bellen. Ein **server-seitiges** Scoring-System
-bewertet Lautstärke, Attack, Punch und Bell-Charakter – der beste Bell gewinnt die Runde.
-Öffentliches Zufalls-Matchmaking und private Lobbys per 6-stelligem Code.
+Multiplayer-Bell-Wettkampf im Browser. Spieler treten gegeneinander an, indem sie drei
+Sekunden ins Mikrofon bellen. Ein **server-seitiges** Scoring-System bewertet Lautstärke,
+Attack, Punch und Bell-Charakter – der beste Bell gewinnt die Runde. Zwei grundverschiedene
+Wege, das zu tun:
+
+- **Kläffkarussell** – Zufalls-Matchmaking mit Fremden, sofortiges 1v1, automatisches
+  Re-Pairing nach jeder Begegnung. Übertragen wird nie die echte Stimme, sondern ein
+  live client-seitig synthetisierter Bark-Sound, gesteuert von der echten Stimme
+  (`packages/bark-synth`).
+- **Private Lobby** – Code-basiert, nur mit eingeladenen Leuten. Hier läuft standardmäßig
+  echter, unveränderter Ton. Flexible Spielerzahl (2–8), vom Host konfigurierbar: Duell
+  (2 Spieler, Best-of-5), Kläffduell (K.-o.-Bracket) oder Rudel (Ranking über 3 Runden).
 
 ## Schnellstart
 
@@ -28,8 +36,9 @@ WebSocket auf demselben Port, ein Zertifikat, keine CORS-Probleme).
 ## Struktur
 
 ```
-packages/scoring/   Framework-freie DSP- und Scoring-Engine (kein Browser, kein Node-spezifisches API)
-packages/protocol/  Zod-Schemas fürs WebSocket-Protokoll, Lobby-/Match-Reducer, Matchmaking, Nickname-Filter
+packages/scoring/    Framework-freie DSP- und Scoring-Engine (kein Browser, kein Node-spezifisches API)
+packages/bark-synth/ Framework-freie Mapping-Mathematik fürs Bark-Synth (Tonhöhe/Lautstärke/Attack)
+packages/protocol/   Zod-Schemas fürs WebSocket-Protokoll, Lobby-/Match-/Bracket-Reducer, Karussell-Queue, Nickname-Filter
 app/                 Next.js App Router: Seiten, PWA-Manifest/Icons, /api/health
 components/          React-Komponenten und Screens
 lib/                 Client-seitige Logik: Audio-Pipeline, WS-Client, Zustand-Store, Storage
@@ -67,17 +76,21 @@ Nachrichten vom `KlaeffClient` (`lib/ws-client.ts`) reagiert.
 
 ## Spielablauf
 
-1. **Startseite**: Nickname/Avatar wählen, dann Schnellsuche oder private Lobby.
+1. **Startseite**: Nickname/Avatar wählen, dann Kläffkarussell oder private Lobby.
 2. **Mikro freigeben**: expliziter Button (Browser verlangen eine User-Geste, bevor
    `AudioContext`/`getUserMedia` funktionieren).
 3. **Kalibrierung**: drei Schritte à drei Sekunden (Stille, Sprechstimme, Test-Bell) – siehe
-   Fairness-Erklärung unten.
-4. **Lobby**: öffentliche Warteschlange (Countdown ab 3 Spielern, Auffüllen bis 6 ohne
-   Reset) oder private Lobby (Code, Host startet manuell, bis zu 8 Spieler).
-5. **Match**: jeder Spieler bellt einmal nacheinander drei Sekunden. Der Server wertet jede
-   Runde sofort aus und broadcastet das Ergebnis an alle.
-6. **Ergebnis**: Podium für die Top 3, Rangliste für den Rest, "Nochmal!" führt direkt zurück
-   in Schnellsuche/Lobby ohne erneute Kalibrierung (die bleibt für die Sitzung gültig).
+   Fairness-Erklärung unten. Bleibt für die Sitzung gültig, kein erneuter Vollablauf beim
+   nächsten Match.
+4. **Kläffkarussell**: sofortiges 1v1 mit dem am längsten wartenden Gegner, kein Countdown.
+   *Oder* **Private Lobby**: 6-stelliger Code, Host konfiguriert Spielerzahl (2–8), Modus
+   und "Echter Ton", startet manuell.
+5. **Match**: abwechselnd/nacheinander wird gebellt (Kläffkarussell: 1 Runde pro Spieler;
+   Duell: Best-of-5; Rudel: 3 Runden pro Spieler; Kläffduell: Best-of-3 pro K.-o.-Matchup).
+   Der Server wertet jede Runde sofort aus und broadcastet das Ergebnis an alle.
+6. **Ergebnis**: Podium/Rangliste. Im Kläffkarussell "Nächster Gegner" (neue Begegnung) oder
+   "Kläffkarussell verlassen"; in privaten Lobbys "Nochmal!" zurück in die Lobby – jeweils
+   ohne erneute Kalibrierung.
 
 ## Fairness – warum die Kalibrierung so kompliziert ist
 
@@ -145,26 +158,41 @@ Alle drei sind **Flags, keine Bans**, und werden dem ganzen Raum als deutsches L
 Client-Audio-Analyse nicht verhindern – es wird hier nicht vorgegaukelt, dass es das könnte.
 
 Die **Melde-Funktion** ist eine Reibungsbremse, kein Sicherheitssystem: ab 3 Meldungen aus
-verschiedenen Lobbys innerhalb 24h wird die Device-UUID für die öffentliche Schnellsuche
-gesperrt (private Lobbys bleiben erlaubt). Diese UUID liegt in `localStorage` und ist damit
+verschiedenen Lobbys innerhalb 24h wird die Device-UUID für das Kläffkarussell gesperrt
+(private Lobbys bleiben erlaubt). Diese UUID liegt in `localStorage` und ist damit
 **trivial umgehbar** (Inkognito-Fenster, Storage löschen, anderer Browser). Das Melde-Log ist
 ein In-Memory-Ringpuffer (500 Einträge) ohne Persistenz über einen Server-Neustart hinaus.
 
 ## Matchmaking und Lobbys
 
-- **Schnellsuche**: ein Klick auf der Startseite. Neue Spieler landen in der ältesten offenen
-  Lobby mit freiem Platz, sonst wird eine neue eröffnet. Lobby startet automatisch nach einem
-  20s-Countdown ab 3 Spielern; Nachfüllen bis 6 Spieler resettet den Countdown nicht.
+- **Kläffkarussell**: ein Klick auf der Startseite reiht in eine reine Warteschlange ein
+  (`packages/protocol/src/carousel.ts`). Sobald zwei Spieler warten, werden die zwei am
+  längsten Wartenden sofort gepaart – kein Countdown, keine Mindestspielerzahl über 2 hinaus.
+  Jede Begegnung ist eine einzelne Mini-Begegnung (jeder bellt einmal); danach führt ein
+  erneuter Klick auf "Nächster Gegner" zu einer neuen Paarung. Nie echter Ton: der Gegner hört
+  einen client-seitig aus den Feature-Frames synthetisierten Bark-Sound
+  (`packages/bark-synth`, `lib/audio/bark-synth-voice.ts`), live gestreamt während des
+  Bellfensters.
 - **Private Lobby**: 6-stelliger Code (Großbuchstaben ohne `I`, `O`, `0`, `1`), Beitritt per
-  Code oder Link `/j/ABCDEF`. Bis zu 8 Spieler, Host startet manuell, Host-Übernahme wenn der
-  Host geht, Kick-Button für den Host.
+  Code oder Link `/j/ABCDEF`. Host konfiguriert Spielerzahl-Limit (2–8), Kick-Button,
+  Host-Übernahme wenn der Host geht. Standardmäßig läuft **echter Ton** (komprimierte
+  Aufnahme pro Bellfenster, `MediaRecorder`/Opus, `lib/audio/recorder.ts`) – der Host kann das
+  jederzeit auf den Bark-Synth umschalten. Modus:
+  - **Duell** (automatisch bei genau 2 Spielern): Best-of-5, abwechselnd, Rundensieger zählt.
+  - **Rudel** (Host wählt, ab 3 Spielern): alle nacheinander, das für 3 Zyklen, Ranking nach
+    Score-Summe.
+  - **Kläffduell** (Host wählt, ab 3 Spielern): echtes K.-o.-Bracket
+    (`packages/protocol/src/bracket.ts`, zufällige Paarung, Freilos bei ungerader Zahl),
+    Best-of-3 pro Matchup, Matchups laufen sequenziell (alle sehen zu).
 - **Kein Freitext-Chat.** Nur ein Emote-Rad mit 8 festen Reaktionen, live über der Avatarkarte
   angezeigt.
 - **Nickname-Filter** (deutsch/englisch, Leetspeak-normalisiert) ersetzt gesperrte Namen durch
   einen generierten Fallback im Stil "Klaeffender Keks 42" – **nicht erschöpfend**, umgehbar
   durch neue Wortkombinationen oder andere Sprachen.
-- **Kein Sprach-Streaming.** Es wird nie Audio übertragen, nur 150 Feature-Frames pro Runde
-  und ein Pegelwert 0–100 (gedrosselt auf 10 Hz) für die Live-Reaktion der Avatare.
+- **Scoring läuft immer über Feature-Frames**, egal ob echter Ton läuft oder nicht: 150
+  Frames pro Bellfenster (live gestreamt, 50 Hz) plus ein Pegelwert 0–100 (gedrosselt auf
+  10 Hz) für die Live-Reaktion der Avatare. Echter Ton ist zusätzlich, nie ein Ersatz fürs
+  Scoring.
 
 ## Barrierefreiheit – ehrlich
 
@@ -198,15 +226,21 @@ framegleich).
 - **`packages/scoring`**: 14 Unit-Tests, inklusive des Fairness-Tests und Anti-Cheat-Flags.
   Fixtures werden deterministisch synthetisiert (`scripts/gen-fixtures.ts`, mulberry32-PRNG),
   kein echtes Mikrofon nötig.
-- **`packages/protocol`**: 46 Unit-Tests für Lobby-Reducer, Matchmaking, Match-Ablauf,
+- **`packages/bark-synth`**: 17 Unit-Tests für die Mapping-Mathematik (Tonhöhe bleibt im
+  200–900Hz-Zielbereich auch bei Extremwerten, Determinismus, keine NaN/Infinity bei Stille).
+- **`packages/protocol`**: Unit-Tests für Lobby-Reducer, Kläffkarussell-Warteschlange,
+  Match-/Duell-/Rudel-Standings, Kläffduell-Bracket (Pairing, Freilose, K.-o.-Progression),
   Nickname-Filter, Report-Schwelle, Lobby-Codes, Zod-Schemas – alles ohne Netzwerk.
-- **`server`**: 8 Integrationstests mit echten `ws`-Clients gegen einen echten
-  `http`+`WebSocketServer` (Schnellsuche mit 5 Spielern, Backfill/Countdown, Disconnect+
-  Reconnect, Host-Übernahme, doppelter Join derselben UUID, Rundentimeout, Nickname-Filter,
-  Melde-Schwelle).
+- **`server`**: 18 Integrationstests mit echten `ws`-Clients gegen einen echten
+  `http`+`WebSocketServer` (Kläffkarussell-Pairing bei 2/4/6 Wartenden, Re-Pairing, aktives
+  Verlassen, Live-Frame-Relay, Melde-Schwelle; private Lobby: Duell/Rudel/Kläffduell komplett
+  durchgespielt, Echter-Ton-Relay inkl. Abschalten, Host-Übernahme, Disconnect/Reconnect,
+  doppelter Join derselben UUID, Rundentimeout, Nickname-Filter).
 - **`e2e`**: Playwright mit `--use-fake-device-for-media-stream` und einer echten (synthetisch
-  erzeugten) WAV-Datei als Mikro-Input – kompletter Zwei-Spieler-Match-Durchlauf, Drei-Spieler-
-  Schnellsuche, iPad-Screenshots in beiden Ausrichtungen, ein Performance-Rauchtest.
+  erzeugten) WAV-Datei als Mikro-Input – kompletter Kläffkarussell-Durchlauf inkl. Re-Pairing,
+  privates Best-of-5-Duell mit echtem Ton, iPad-Screenshots in beiden Ausrichtungen, ein
+  Performance-Rauchtest. Rudel/Kläffduell bewusst nur auf Protokoll-/Server-Ebene getestet,
+  nicht per Browser-E2E (siehe BLOCKERS.md).
 
 `npm run verify` fasst Lint+Typecheck+Test zusammen und läuft vor jedem Commit.
 

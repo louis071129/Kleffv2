@@ -29,9 +29,11 @@ export function MicPermissionScreen({ onGranted, onCancel }: MicPermissionScreen
       <Card shadowColor="var(--bark)">
         <h2 className="font-display text-2xl">Mikro freigeben</h2>
         <p className="mt-2 text-sm">
-          KLÄFF braucht dein Mikrofon, um deinen Bell zu bewerten. Es wird{" "}
-          <strong>niemals</strong> Ton aufgezeichnet oder übertragen - nur Zahlen, die
-          beschreiben wie laut und wie &bdquo;bellig&ldquo; dein Signal ist.
+          KLÄFF braucht dein Mikrofon, um deinen Bell zu bewerten. Gewertet wird{" "}
+          <strong>immer</strong> nur anhand von Zahlen, die beschreiben wie laut und wie
+          &bdquo;bellig&ldquo; dein Signal ist - nie anhand von Ton selbst. Im Kläffkarussell
+          hört niemand deine echte Stimme, nur einen computergenerierten Bell-Sound. In
+          privaten Lobbys läuft standardmäßig echter Ton (vom Host abschaltbar).
         </p>
         {status === "denied" && (
           <p className="mt-3 rounded-lg border-2 border-[var(--pink)] bg-[var(--pink)]/10 p-3 text-sm">

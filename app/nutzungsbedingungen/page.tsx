@@ -98,13 +98,17 @@ export default function NutzungsbedingungenPage(): React.ReactElement {
       <section>
         <h2>6. Mikrofonnutzung</h2>
         <p>
-          KLÄFF benötigt zum Spielen Zugriff auf dein Mikrofon. Es wird zu
-          keinem Zeitpunkt Ton aufgezeichnet, gespeichert oder übertragen –
-          verarbeitet werden ausschließlich lokal aus dem Mikrofonsignal
-          berechnete Lautstärke- und Klangkennwerte (Details in der{" "}
-          <a href="/datenschutz">Datenschutzerklärung</a>). Du erteilst dem
-          Mikrofonzugriff über den Berechtigungsdialog deines Browsers; ohne
-          diese Freigabe kann KLÄFF nicht gespielt werden.
+          KLÄFF benötigt zum Spielen Zugriff auf dein Mikrofon. Gewertet wird
+          immer ausschließlich anhand von lokal aus dem Mikrofonsignal
+          berechneten Lautstärke- und Klangkennwerten, nie anhand von Ton
+          selbst (Details in der <a href="/datenschutz">Datenschutzerklärung</a>).
+          Ob darüber hinaus auch echter Ton übertragen wird, hängt vom Modus
+          ab: im <strong>Kläffkarussell</strong> nie – dort hört dein Gegner
+          nur einen computergenerierten Bell-Sound. In einer{" "}
+          <strong>privaten Lobby</strong> läuft standardmäßig echter Ton
+          (vom Host abschaltbar) – wer beitritt, sollte das wissen. Du
+          erteilst den Mikrofonzugriff über den Berechtigungsdialog deines
+          Browsers; ohne diese Freigabe kann KLÄFF nicht gespielt werden.
         </p>
       </section>
 
