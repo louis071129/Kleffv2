@@ -219,6 +219,30 @@ async function playTugOfWarMatch(
   throw new Error("Tauzieh-Match nicht innerhalb der Sicherheitsgrenze entschieden");
 }
 
+/**
+ * Spielt ein Match gegen einen Bot bis zum MATCH_RESULT durch: der Bot
+ * bellt von selbst (server-seitiger Timer, siehe GameServer.maybeScheduleBotBark),
+ * der Mensch bellt nur, wenn ER an der Reihe ist.
+ */
+async function playAgainstBot(
+  listener: TestClient,
+  human: { client: TestClient; playerId: string },
+  maxRounds = 40,
+): Promise<Extract<ServerMessage, { type: "MATCH_RESULT" }>> {
+  for (let i = 0; i < maxRounds; i += 1) {
+    const next = await listener.waitForEither("ROUND_STARTED", "MATCH_RESULT", 5000);
+    if (next.type === "MATCH_RESULT") {
+      return next;
+    }
+    if (next.barkerPlayerId === human.playerId) {
+      human.client.send({ type: "BARK_SUBMIT", frames: makeFrames(-5) });
+      await listener.waitFor("ROUND_RESULT", 5000);
+    }
+    // Sonst ist der Bot dran - der bellt serverseitig von selbst, nur warten.
+  }
+  throw new Error("Match gegen Bot nicht innerhalb der Sicherheitsgrenze entschieden");
+}
+
 describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", () => {
   it("zwei wartende Spieler werden sofort gepaart und spielen eine komplette Begegnung (nie Rohaudio)", async () => {
     const harness = await createHarness();
@@ -361,6 +385,31 @@ describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", 
     const error = await target.client.waitFor("ERROR", 2000);
     expect(error.code).toBe("CAROUSEL_EXCLUDED");
   }, 10000);
+
+  it("wartet ein einzelner Spieler laenger als botFallbackMs ohne menschlichen Gegner, wird er mit einem Bot gepaart", async () => {
+    const harness = await createHarness({ botFallbackMs: 150, botBarkDelayMs: [10, 30] });
+    currentHarness = harness;
+
+    const a = await harness.connect("device-solo", "Solo");
+    a.client.send({ type: "CAROUSEL_JOIN" });
+    await a.client.waitFor("CAROUSEL_QUEUED", 2000);
+
+    const lobbyState = await a.client.waitFor("LOBBY_STATE", 2000);
+    expect(lobbyState.lobby.players).toHaveLength(2);
+    const bot = lobbyState.lobby.players.find((p) => p.id !== a.playerId);
+    expect(bot).toBeDefined();
+    expect(bot!.botDifficulty).not.toBeNull();
+    expect(["welpe", "klaeffer", "alptraum-dogge"]).toContain(bot!.botDifficulty);
+
+    const started = await a.client.waitFor("MATCH_STARTED", 2000);
+    expect(started.style).toBe("tugofwar");
+    expect(started.playerOrder).toContain(bot!.id);
+
+    const result = await playAgainstBot(a.client, a);
+    expect(result.standings).toHaveLength(2);
+    expect(result.standings.some((s) => s.playerId === a.playerId)).toBe(true);
+    expect(result.standings.some((s) => s.playerId === bot!.id)).toBe(true);
+  }, 20000);
 });
 
 describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", () => {
@@ -607,5 +656,46 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
     await client.waitFor("WELCOME");
     const rejected = await client.waitFor("NICKNAME_REJECTED", 2000);
     expect(rejected.fallbackNickname).not.toMatch(/hurensohn/iu);
+  }, 10000);
+
+  it("Bot zu einer privaten Lobby hinzufuegen: Runde laeuft komplett durch, ohne zweiten Menschen (Solo-Test fuers iPad)", async () => {
+    const harness = await createHarness({ botBarkDelayMs: [10, 30] });
+    currentHarness = harness;
+
+    const host = await harness.connect("device-bot1", "Host");
+    host.client.send({ type: "LOBBY_CREATE" });
+    await host.client.waitFor("LOBBY_STATE");
+
+    host.client.send({ type: "LOBBY_ADD_BOT", difficulty: "klaeffer" });
+    const withBot = await host.client.waitFor("LOBBY_STATE", 2000);
+    expect(withBot.lobby.players).toHaveLength(2);
+    const bot = withBot.lobby.players.find((p) => p.id !== host.playerId);
+    expect(bot?.botDifficulty).toBe("klaeffer");
+    expect(bot?.nickname.startsWith("Kläffer")).toBe(true);
+
+    host.client.send({ type: "LOBBY_START" });
+    const started = await host.client.waitFor("MATCH_STARTED", 2000);
+    expect(started.style).toBe("tugofwar");
+
+    const result = await playAgainstBot(host.client, host);
+    expect(result.standings).toHaveLength(2);
+    expect(result.standings.some((s) => s.playerId === bot!.id)).toBe(true);
+  }, 20000);
+
+  it("Bot kann per LOBBY_KICK wieder aus der Lobby entfernt werden wie ein echter Spieler", async () => {
+    const harness = await createHarness();
+    currentHarness = harness;
+
+    const host = await harness.connect("device-bot2", "Host");
+    host.client.send({ type: "LOBBY_CREATE" });
+    await host.client.waitFor("LOBBY_STATE");
+
+    host.client.send({ type: "LOBBY_ADD_BOT", difficulty: "welpe" });
+    const withBot = await host.client.waitFor("LOBBY_STATE", 2000);
+    const bot = withBot.lobby.players.find((p) => p.id !== host.playerId)!;
+
+    host.client.send({ type: "LOBBY_KICK", targetPlayerId: bot.id });
+    const afterKick = await host.client.waitFor("LOBBY_STATE", 2000);
+    expect(afterKick.lobby.players).toHaveLength(1);
   }, 10000);
 });

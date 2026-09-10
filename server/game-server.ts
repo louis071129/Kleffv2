@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { WebSocket, type WebSocketServer } from "ws";
-import { scoreBark, type AudioFrame, type BarkScore, type CalibrationProfile } from "@klaeff/scoring";
+import { generateSyntheticBarkFrames, scoreBark, type AudioFrame, type BarkScore, type BotDifficulty, type CalibrationProfile } from "@klaeff/scoring";
 import {
+  addBotToLobby,
   addPlayer,
   addReport,
   advanceBracket,
@@ -11,6 +12,8 @@ import {
   computeTugOfWarStandings,
   computeTugOfWarState,
   createBracket,
+  createBotPlayer,
+  createCarouselLobby,
   createCarouselState,
   createMatchWithOrder,
   createPrivateLobby,
@@ -18,6 +21,7 @@ import {
   currentBarker,
   dequeueFromCarousel,
   enqueueForCarousel,
+  isBotPlayer,
   isCurrentRoundComplete,
   isDeviceExcludedFromPublicQueue,
   isMatchFinished,
@@ -28,6 +32,7 @@ import {
   MatchError,
   nextUndecidedMatchup,
   parseClientMessage,
+  randomBotDifficulty,
   recordMatchupResult,
   removePlayer,
   sanitizeNickname,
@@ -80,6 +85,10 @@ export interface GameServerOptions {
   readonly levelBroadcastMinIntervalMs?: number;
   readonly maxEnvelopeHistoryPerPlayer?: number;
   readonly idleLobbyGcMs?: number;
+  /** Wartet ein Spieler im Kläffkarussell so lange ohne menschlichen Gegner, wird er mit einem Bot gepaart, siehe Auftrag. */
+  readonly botFallbackMs?: number;
+  /** [min, max] Verzoegerung in ms, bevor ein Bot in seiner Runde "bellt" - fuer eine natuerlichere Pacing, kein Instant-Ergebnis. */
+  readonly botBarkDelayMs?: readonly [number, number];
   readonly now?: () => number;
 }
 
@@ -130,6 +139,7 @@ export class GameServer {
   private readonly envelopeHistoryByPlayerId = new Map<PlayerId, number[][]>();
   private readonly lastLevelBroadcastAt = new Map<PlayerId, number>();
   private readonly roundTimers = new Map<MatchId, RoundTimer>();
+  private readonly botBarkTimers = new Map<MatchId, ReturnType<typeof setTimeout>>();
   private readonly playerProfiles = new Map<PlayerId, { nickname: string; avatar: AvatarSeed; deviceUuid: DeviceUuid }>();
   private carouselState = createCarouselState();
   private reportState = createReportState();
@@ -145,6 +155,8 @@ export class GameServer {
       levelBroadcastMinIntervalMs: options.levelBroadcastMinIntervalMs ?? 100,
       maxEnvelopeHistoryPerPlayer: options.maxEnvelopeHistoryPerPlayer ?? 5,
       idleLobbyGcMs: options.idleLobbyGcMs ?? 30 * 60_000,
+      botFallbackMs: options.botFallbackMs ?? 6_000,
+      botBarkDelayMs: options.botBarkDelayMs ?? [500, 2000],
       now: options.now ?? (() => Date.now()),
     };
     this.startedAt = this.options.now();
@@ -178,6 +190,9 @@ export class GameServer {
     }
     for (const roundTimer of this.roundTimers.values()) {
       clearTimeout(roundTimer.timer);
+    }
+    for (const botBarkTimer of this.botBarkTimers.values()) {
+      clearTimeout(botBarkTimer);
     }
     for (const session of this.sessionsByToken.values()) {
       if (session.disconnectGraceTimer) {
@@ -359,6 +374,10 @@ export class GameServer {
         this.handleLobbyKick(session, message.targetPlayerId, now);
         return;
 
+      case "LOBBY_ADD_BOT":
+        this.handleLobbyAddBot(session, message.difficulty, now);
+        return;
+
       case "LOBBY_SET_MAX_PLAYERS":
         this.withOwnLobby(session, (lobby) => setMaxPlayers(lobby, session.playerId, message.maxPlayers, now));
         return;
@@ -515,6 +534,32 @@ export class GameServer {
     }
   }
 
+  /**
+   * Wartet ein Spieler im Kläffkarussell laenger als botFallbackMs ohne
+   * menschlichen Gegner (kein zweiter Wartender), wird er automatisch mit
+   * einem Bot zufaelliger Schwierigkeit gepaart - siehe Auftrag. Laeuft
+   * ueber denselben Lobby-/Match-Aufbau wie eine normale Paarung
+   * (advanceCarousel oben), nur mit einem synthetischen zweiten Spieler.
+   */
+  private pairStaleCarouselEntriesWithBots(now: number): void {
+    const staleEntries = this.carouselState.queue.filter((entry) => now - entry.queuedAt >= this.options.botFallbackMs);
+    for (const entry of staleEntries) {
+      // Erneut pruefen: die Schleife unten kann einen Spieler bereits im
+      // vorigen Durchlauf verpaart haben (dequeueFromCarousel darunter).
+      if (!isQueued(this.carouselState, entry.player.id)) {
+        continue;
+      }
+      this.carouselState = dequeueFromCarousel(this.carouselState, entry.player.id);
+      const bot = createBotPlayer(randomBotDifficulty(), now);
+      const lobby = createCarouselLobby(entry.player, bot, now);
+      this.lobbies.set(lobby.id, lobby);
+      this.lobbyIdByPlayerId.set(entry.player.id, lobby.id);
+      this.lobbyIdByPlayerId.set(bot.id, lobby.id);
+      this.broadcastToLobby(lobby.id, { type: "LOBBY_STATE", lobby: toSnapshot(lobby) });
+      this.beginMatch(lobby.id, buildDuelPlayerOrder(entry.player.id, bot.id, TUG_OF_WAR_MAX_CYCLES), "carousel", now);
+    }
+  }
+
   // --- Private Lobby -------------------------------------------------------
 
   private handleLobbyCreate(session: ServerSession, now: number): void {
@@ -591,6 +636,26 @@ export class GameServer {
     if (targetSession) {
       this.sendToSession(targetSession, { type: "ERROR", code: "KICKED", message: "Du wurdest vom Host aus der Lobby entfernt." });
     }
+    this.broadcastToLobby(lobby.id, { type: "LOBBY_STATE", lobby: toSnapshot(updated) });
+  }
+
+  /** Host fuegt einen Bot in einen freien Slot ein, siehe Auftrag. Entfernen laeuft ueber das bestehende LOBBY_KICK. */
+  private handleLobbyAddBot(session: ServerSession, difficulty: BotDifficulty, now: number): void {
+    const lobbyId = this.lobbyIdByPlayerId.get(session.playerId);
+    const lobby = lobbyId ? this.lobbies.get(lobbyId) : undefined;
+    if (!lobby) {
+      return;
+    }
+    const bot = createBotPlayer(difficulty, now);
+    let updated: Lobby;
+    try {
+      updated = addBotToLobby(lobby, session.playerId, bot, now);
+    } catch (error) {
+      this.sendLobbyError(session, error);
+      return;
+    }
+    this.lobbies.set(lobby.id, updated);
+    this.lobbyIdByPlayerId.set(bot.id, lobby.id);
     this.broadcastToLobby(lobby.id, { type: "LOBBY_STATE", lobby: toSnapshot(updated) });
   }
 
@@ -831,6 +896,53 @@ export class GameServer {
     }, this.options.roundTimeoutMs);
     timer.unref?.();
     this.roundTimers.set(match.id, { matchId: match.id, roundIndex: match.currentRoundIndex, timer });
+
+    this.maybeScheduleBotBark(match, lobbyId, barkerId);
+  }
+
+  /**
+   * Ist der aktuelle Barker ein Bot (kein Mikro, keine echte Session), bellt
+   * er von selbst nach einer kurzen, zufaelligen Verzoegerung - siehe
+   * Auftrag. Nutzt denselben Rundenablauf wie ein echter Spieler
+   * (finalizeRound), kein separater Match-Pfad fuer Bots.
+   */
+  private maybeScheduleBotBark(match: Match, lobbyId: LobbyId, barkerId: PlayerId): void {
+    const barker = this.lobbies.get(lobbyId)?.players.find((p) => p.id === barkerId);
+    if (!barker || !isBotPlayer(barker) || !barker.botDifficulty) {
+      return;
+    }
+    const difficulty = barker.botDifficulty;
+    const [minMs, maxMs] = this.options.botBarkDelayMs;
+    const delayMs = minMs + Math.random() * Math.max(0, maxMs - minMs);
+    const roundIndex = match.currentRoundIndex;
+    const matchId = match.id;
+
+    const existing = this.botBarkTimers.get(matchId);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    const timer = setTimeout(() => {
+      this.botBarkTimers.delete(matchId);
+      this.submitBotBark(matchId, roundIndex, lobbyId, barkerId, difficulty);
+    }, delayMs);
+    timer.unref?.();
+    this.botBarkTimers.set(matchId, timer);
+  }
+
+  private submitBotBark(matchId: MatchId, roundIndex: number, lobbyId: LobbyId, barkerId: PlayerId, difficulty: BotDifficulty): void {
+    const match = this.matches.get(matchId);
+    if (!match || match.currentRoundIndex !== roundIndex || match.phase === "finished" || currentBarker(match) !== barkerId) {
+      return;
+    }
+    const timer = this.roundTimers.get(matchId);
+    if (timer) {
+      clearTimeout(timer.timer);
+      this.roundTimers.delete(matchId);
+    }
+    // Seed aus Match-ID + Rundenindex - reproduzierbar pro Runde, siehe
+    // generateSyntheticBarkFrames und packages/scoring/src/bot.ts.
+    const frames = generateSyntheticBarkFrames({ seed: `${matchId}:${roundIndex}`, difficulty });
+    this.finalizeRound(match, lobbyId, barkerId, frames, DEFAULT_CALIBRATION, this.now());
   }
 
   private handleRoundTimeout(matchId: MatchId, roundIndex: number, lobbyId: LobbyId): void {
@@ -873,12 +985,19 @@ export class GameServer {
     calibration: CalibrationProfile,
     now: number,
   ): void {
-    const history = this.envelopeHistoryByPlayerId.get(playerId) ?? [];
+    // Bot-Frames sind server-generiert und damit per Definition vertrauenswuerdig
+    // (siehe Auftrag) - keine REPLAY_SUSPECT-Historie fuer Bots, echte Spieler
+    // sind von dieser Zeile unberuehrt (Bedingung greift nur bei einem
+    // erkannten Bot-Spieler in genau dieser Lobby).
+    const barkerIsBot = isBotPlayer(this.lobbies.get(lobbyId)?.players.find((p) => p.id === playerId) ?? {});
+    const history = barkerIsBot ? [] : (this.envelopeHistoryByPlayerId.get(playerId) ?? []);
     const score = scoreBark(frames, calibration, { previousRoundEnvelopes: history });
 
-    const envelope = frames.map((f) => f.rmsDbfs);
-    const nextHistory = [...history, envelope].slice(-this.options.maxEnvelopeHistoryPerPlayer);
-    this.envelopeHistoryByPlayerId.set(playerId, nextHistory);
+    if (!barkerIsBot) {
+      const envelope = frames.map((f) => f.rmsDbfs);
+      const nextHistory = [...history, envelope].slice(-this.options.maxEnvelopeHistoryPerPlayer);
+      this.envelopeHistoryByPlayerId.set(playerId, nextHistory);
+    }
 
     let updatedMatch: Match;
     try {
@@ -979,6 +1098,7 @@ export class GameServer {
 
   private tick(): void {
     const now = this.now();
+    this.pairStaleCarouselEntriesWithBots(now);
     this.garbageCollectIdleLobbies(now);
   }
 
@@ -1090,7 +1210,15 @@ function toSnapshot(lobby: Lobby): {
   code: string | null;
   mode: Lobby["mode"];
   phase: Lobby["phase"];
-  players: { id: string; nickname: string; avatar: AvatarSeed; connected: boolean; isHost: boolean; joinedAt: number }[];
+  players: {
+    id: string;
+    nickname: string;
+    avatar: AvatarSeed;
+    connected: boolean;
+    isHost: boolean;
+    joinedAt: number;
+    botDifficulty: BotDifficulty | null;
+  }[];
   hostId: string | null;
   maxPlayers: number;
   minPlayersToStart: number;
@@ -1110,6 +1238,7 @@ function toSnapshot(lobby: Lobby): {
       connected: p.connected,
       isHost: p.isHost,
       joinedAt: p.joinedAt,
+      botDifficulty: p.botDifficulty ?? null,
     })),
     hostId: lobby.hostId,
     maxPlayers: lobby.maxPlayers,

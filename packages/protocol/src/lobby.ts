@@ -98,6 +98,14 @@ export function addPlayer(lobby: Lobby, player: Player, now: number): Lobby {
   };
 }
 
+/** Host fuegt einen Bot in einen freien Slot ein - siehe protocol/src/bot.ts fuer createBotPlayer. */
+export function addBotToLobby(lobby: Lobby, requesterId: PlayerId, bot: Player, now: number): Lobby {
+  if (lobby.mode !== "private" || lobby.hostId !== requesterId) {
+    throw new LobbyError("NOT_HOST");
+  }
+  return addPlayer(lobby, bot, now);
+}
+
 export function removePlayer(lobby: Lobby, playerId: PlayerId, now: number): Lobby {
   const remaining = lobby.players.filter((p) => p.id !== playerId);
   let hostId = lobby.hostId;
