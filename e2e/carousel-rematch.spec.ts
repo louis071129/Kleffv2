@@ -15,8 +15,13 @@ test.describe("Kläffkarussell", () => {
     const a = await contextA.newPage();
     const b = await contextB.newPage();
 
-    await joinCarousel(a);
-    await joinCarousel(b);
+    // Parallel statt nacheinander beitreten: jeder Join braucht eine echte
+    // Kalibrierung (~9s), sequenziell wuerde der zuerst fertige Spieler laenger
+    // als botFallbackMs (Default 6s, siehe GameServerOptions) allein in der
+    // Warteschlange stehen und faelschlich mit einem Bot statt dem anderen
+    // Menschen gepaart werden - das hier ist ein Test fuer zwei echte
+    // Menschen, siehe Auftrag ("bestehende Tests bleiben unveraendert gruen").
+    await Promise.all([joinCarousel(a), joinCarousel(b)]);
 
     // Sofort gepaart, kein Countdown - der Match-Start folgt der Paarung so
     // unmittelbar, dass der Lobby-Screen oft nur einen Frame lang sichtbar

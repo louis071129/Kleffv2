@@ -89,3 +89,32 @@ export async function playTugOfWarUntilResult(pages: readonly Page[], maxRounds 
   }
   throw new Error("Tauzieh-Match nicht innerhalb der Sicherheitsgrenze entschieden (E2E)");
 }
+
+/**
+ * Spielt ein Match gegen einen Bot durch, bis SIEG!/NIEDERLAGE erscheint -
+ * nur EIN echter Browser-Context noetig (der Bot hat keine eigene Page,
+ * bellt serverseitig von selbst). Ist der Bot an der Reihe, wird nur kurz
+ * gewartet (Bot-Bellverzoegerung ist bis zu 2s, siehe GameServerOptions.
+ * botBarkDelayMs) statt eine feste Rundenzahl anzunehmen.
+ */
+export async function playSoloAgainstBot(page: Page, maxRounds = 40): Promise<void> {
+  for (let round = 0; round < maxRounds; round += 1) {
+    const resultVisible = await page
+      .getByText(/SIEG!|NIEDERLAGE/u)
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (resultVisible) return;
+
+    const bellButton = page.getByRole("button", { name: /BELL!/u });
+    if (await bellButton.isVisible().catch(() => false)) {
+      await bellButton.click();
+      // Bellfenster dauert 3s, danach kommt das Rundenergebnis.
+      await page.waitForTimeout(3500);
+    } else {
+      // Der Bot ist dran - er bellt serverseitig von selbst, nur kurz pollen.
+      await page.waitForTimeout(400);
+    }
+  }
+  throw new Error("Match gegen Bot nicht innerhalb der Sicherheitsgrenze entschieden (E2E)");
+}

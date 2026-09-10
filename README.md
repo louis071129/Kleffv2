@@ -178,16 +178,18 @@ ein In-Memory-Ringpuffer (500 Einträge) ohne Persistenz über einen Server-Neus
 - **Kläffkarussell**: ein Klick auf der Startseite reiht in eine reine Warteschlange ein
   (`packages/protocol/src/carousel.ts`). Sobald zwei Spieler warten, werden die zwei am
   längsten Wartenden sofort gepaart – kein Countdown, keine Mindestspielerzahl über 2 hinaus.
-  Jede Begegnung ist eine einzelne Mini-Begegnung (jeder bellt einmal); danach führt ein
-  erneuter Klick auf "Nächster Gegner" zu einer neuen Paarung. Nie echter Ton: der Gegner hört
-  einen client-seitig aus den Feature-Frames synthetisierten Bark-Sound
-  (`packages/bark-synth`, `lib/audio/bark-synth-voice.ts`), live gestreamt während des
-  Bellfensters.
+  Wartet jemand länger als `botFallbackMs` (Default 6s) ohne menschlichen Gegner, wird
+  automatisch mit einem Bot zufälliger Schwierigkeit gepaart (siehe "Bots" unten). Jede
+  Begegnung ist eine einzelne Mini-Begegnung (jeder bellt einmal); danach führt ein erneuter
+  Klick auf "Nächster Gegner" zu einer neuen Paarung. Nie echter Ton: der Gegner hört einen
+  client-seitig aus den Feature-Frames synthetisierten Bark-Sound (`packages/bark-synth`,
+  `lib/audio/bark-synth-voice.ts`), live gestreamt während des Bellfensters.
 - **Private Lobby**: 6-stelliger Code (Großbuchstaben ohne `I`, `O`, `0`, `1`), Beitritt per
-  Code oder Link `/j/ABCDEF`. Host konfiguriert Spielerzahl-Limit (2–8), Kick-Button,
-  Host-Übernahme wenn der Host geht. Standardmäßig läuft **echter Ton** (komprimierte
-  Aufnahme pro Bellfenster, `MediaRecorder`/Opus, `lib/audio/recorder.ts`) – der Host kann das
-  jederzeit auf den Bark-Synth umschalten. Modus:
+  Code oder Link `/j/ABCDEF`. Host konfiguriert Spielerzahl-Limit (2–8), Kick-Button, kann Bots
+  in freie Slots einfügen (siehe "Bots" unten), Host-Übernahme wenn der Host geht.
+  Standardmäßig läuft **echter Ton** (komprimierte Aufnahme pro Bellfenster,
+  `MediaRecorder`/Opus, `lib/audio/recorder.ts`) – der Host kann das jederzeit auf den
+  Bark-Synth umschalten. Modus:
   - **Duell** (automatisch bei genau 2 Spielern): Tauzieh, abwechselnd, endet sofort bei ±100
     auf der Seil-Skala.
   - **Rudel** (Host wählt, ab 3 Spielern): alle nacheinander, das für 3 Zyklen, Ranking nach
@@ -204,6 +206,21 @@ ein In-Memory-Ringpuffer (500 Einträge) ohne Persistenz über einen Server-Neus
   Frames pro Bellfenster (live gestreamt, 50 Hz) plus ein Pegelwert 0–100 (gedrosselt auf
   10 Hz) für die Live-Reaktion der Avatare. Echter Ton ist zusätzlich, nie ein Ersatz fürs
   Scoring.
+
+## Bots
+
+Kein simuliertes Mikrofon: der Server generiert eine plausible `AudioFrame`-Sequenz
+(`generateSyntheticBarkFrames` in `packages/scoring/src/bot.ts`) und schickt sie durch dieselbe,
+unveränderte `scoreBark`-Funktion wie ein echter Spieler – eine Quelle der Wahrheit für die
+Wertung, kein zweiter Pfad. Drei Schwierigkeitsstufen (Welpe/Kläffer/Alptraum-Dogge, empirisch
+kalibriert auf Score-Mittelwerte ~45/~65/~82 mit sinkender Streuung). Ein Bot ist immer als
+solcher erkennbar: eigene deutsche Namensliste ("Welpe Keks", "Kläffer Rudi", "Alptraum-Dogge
+Bruno", ...), ein kleinerer/konstanter Avatar-Seed-Bereich, und überall ein sichtbares
+`BotBadge` (Avatarkarte, Bühne, Ergebnis-Screen) – nie wie ein Mensch dargestellt. Zwei
+Einsatzorte: automatischer Kläffkarussell-Fallback nach `botFallbackMs` (Default 6s) ohne
+menschlichen Gegner, und "Bot hinzufügen" als Host-Aktion in der privaten Lobby (jederzeit
+entfernbar über das bestehende Kick). Ist ein Bot am Zug, bellt er nach einer kurzen,
+zufälligen Verzögerung von selbst – über denselben Rundenablauf wie ein echter `BARK_SUBMIT`.
 
 ## Barrierefreiheit – ehrlich
 
@@ -234,31 +251,37 @@ framegleich).
 
 ## Tests
 
-- **`packages/scoring`**: 14 Unit-Tests, inklusive des Fairness-Tests und Anti-Cheat-Flags.
-  Fixtures werden deterministisch synthetisiert (`scripts/gen-fixtures.ts`, mulberry32-PRNG),
-  kein echtes Mikrofon nötig.
+- **`packages/scoring`**: 14 Unit-Tests, inklusive des Fairness-Tests und Anti-Cheat-Flags, plus
+  15 Tests für den Bot-Frame-Generator (Toleranzband je Schwierigkeitsstufe über 200
+  Stichproben, keine NaN/Infinity/negativen Scores, Determinismus, Streuungs-Reihenfolge, nie
+  ein Anti-Cheat-Flag). Fixtures werden deterministisch synthetisiert (`scripts/gen-fixtures.ts`,
+  mulberry32-PRNG), kein echtes Mikrofon nötig.
 - **`packages/bark-synth`**: 17 Unit-Tests für die Mapping-Mathematik (Tonhöhe bleibt im
   200–900Hz-Zielbereich auch bei Extremwerten, Determinismus, keine NaN/Infinity bei Stille).
 - **`packages/protocol`**: Unit-Tests für Lobby-Reducer, Kläffkarussell-Warteschlange,
   Match-/Rudel-Standings, Tauzieh-Kernmechanik (`tug-of-war.ts`: neutraler Start, Schwelle,
   deterministischer Sudden-Death-Tiebreak, Determinismus), Kläffduell-Bracket (Pairing,
-  Freilose, K.-o.-Progression), Nickname-Filter, Report-Schwelle, Lobby-Codes, Zod-Schemas –
-  alles ohne Netzwerk.
-- **`server`**: 18 Integrationstests mit echten `ws`-Clients gegen einen echten
+  Freilose, K.-o.-Progression), Nickname-Filter, Report-Schwelle, Lobby-Codes, Zod-Schemas,
+  Bot-Spieler (Namenspräfix pro Stufe, Avatar-Seed erfüllt weiterhin `AvatarSeedSchema`,
+  Zusammenspiel mit `addPlayer`/`kickPlayer`) – alles ohne Netzwerk.
+- **`server`**: 21 Integrationstests mit echten `ws`-Clients gegen einen echten
   `http`+`WebSocketServer` (Kläffkarussell-Pairing bei 2/4/6 Wartenden, Re-Pairing, aktives
-  Verlassen, Live-Frame-Relay, Melde-Schwelle; private Lobby: Duell/Rudel/Kläffduell komplett
-  durchgespielt – Duell/Kläffkarussell/Kläffduell-Matchups über deterministisch stark
-  unterschiedliche Scores bis zur Tauzieh-Schwelle gespielt statt über feste Rundenzahlen –,
+  Verlassen, Live-Frame-Relay, Melde-Schwelle, Bot-Fallback nach Timeout; private Lobby:
+  Duell/Rudel/Kläffduell komplett durchgespielt – Duell/Kläffkarussell/Kläffduell-Matchups über
+  deterministisch stark unterschiedliche Scores bis zur Tauzieh-Schwelle gespielt statt über
+  feste Rundenzahlen –, Bot per "Bot hinzufügen" komplett durchgespielt und wieder entfernt,
   Echter-Ton-Relay inkl. Abschalten, Host-Übernahme, Disconnect/Reconnect, doppelter Join
   derselben UUID, Rundentimeout, Nickname-Filter).
 - **`e2e`**: Playwright mit `--use-fake-device-for-media-stream` und einer echten (synthetisch
   erzeugten) WAV-Datei als Mikro-Input – kompletter Kläffkarussell-Durchlauf inkl. Re-Pairing,
-  privates Tauzieh-Duell mit echtem Ton, iPad-Screenshots in beiden Ausrichtungen, ein
-  Performance-Rauchtest. Beide Tauzieh-Matches laufen dynamisch bis SIEG!/NIEDERLAGE
-  (`playTugOfWarUntilResult` in `e2e/helpers.ts`) statt über eine feste Rundenzahl – alle
-  E2E-Kontexte teilen dieselbe Fake-Audio-Datei, das Match wird also über den deterministischen
-  Sudden-Death-Fallback entschieden. Rudel/Kläffduell bewusst nur auf Protokoll-/Server-Ebene
-  getestet, nicht per Browser-E2E (siehe BLOCKERS.md).
+  privates Tauzieh-Duell mit echtem Ton, allein gegen einen Bot spielen (`solo-vs-bot.spec.ts`),
+  iPad-Screenshots in beiden Ausrichtungen, ein Performance-Rauchtest. Beide Tauzieh-Matches mit
+  zwei Menschen laufen dynamisch bis SIEG!/NIEDERLAGE (`playTugOfWarUntilResult` in
+  `e2e/helpers.ts`) statt über eine feste Rundenzahl – alle E2E-Kontexte teilen dieselbe
+  Fake-Audio-Datei, das Match wird also über den deterministischen Sudden-Death-Fallback
+  entschieden; der Solo-Bot-Test nutzt dafür `playSoloAgainstBot` (wartet, wenn der Bot dran
+  ist, statt eine feste Rundenzahl anzunehmen). Rudel/Kläffduell bewusst nur auf Protokoll-/
+  Server-Ebene getestet, nicht per Browser-E2E (siehe BLOCKERS.md).
 
 `npm run verify` fasst Lint+Typecheck+Test zusammen und läuft vor jedem Commit.
 

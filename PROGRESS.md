@@ -626,3 +626,78 @@ System): Nutzer wählte "Kläffkarussell + Duell + Kläffduell-Matchups", Rudel 
 inklusive der beiden auf dynamische Tauzieh-Rundenzahl umgestellten Spezifikationen) sind nach
 dem Umbau grün.
 
+## Bots
+
+Auftrag: Bot-Gegner hinzufügen, ohne irgendetwas am bestehenden Spiel zu verändern. Kernidee laut
+Auftrag: der Server generiert eine plausible `AudioFrame[]`-Sequenz und schickt sie durch die
+bestehende, unveränderte Scoring-Funktion - eine Quelle der Wahrheit für Score-Berechnung, kein
+zweiter Pfad. Das ist exakt so umgesetzt.
+
+1. **Frame-Generator** (`packages/scoring/src/bot.ts`, neu): `generateSyntheticBarkFrames({seed,
+   difficulty})` baut eine deterministische `AudioFrame`-Sequenz (Vor-Stille, Attack-Rampe exakt
+   auf die geforderte Attack-Zeit kalibriert, kurzes Plateau, exponentieller Abfall) für die drei
+   Stufen Welpe/Kläffer/Alptraum-Dogge. Läuft durch `scoreBark` unverändert. Empirisch gegen die
+   echte Funktion kalibriert (Skript mit 500-1000 Stichproben pro Stufe, siehe BLOCKERS.md für
+   die konkreten Zielwerte) - Mittelwerte liegen nahe an den geforderten Bereichen (~45/~65/~82),
+   Streuung sinkt wie gefordert von Welpe (hoch) über Kläffer (mittel) zu Alptraum-Dogge (gering).
+   15 Tests: Toleranzband je Stufe über 200 Stichproben, keine NaN/Infinity/negativen Scores,
+   Determinismus, Streuungs-Reihenfolge, nie ein Anti-Cheat-Flag.
+2. **Protokoll** (`packages/protocol/src/bot.ts`, neu): `Player` bekommt ein neues optionales
+   Feld `botDifficulty` (undefined für echte Spieler - kein bestehendes Feld angefasst).
+   `createBotPlayer` baut daraus einen vollständigen `Player` mit fester deutscher Namensliste
+   pro Stufe ("Welpe Keks", "Kläffer Rudi", "Alptraum-Dogge Bruno", ...), einem kleineren,
+   konstanten Avatar-Seed-Bereich (kein neues Accessoire, siehe BLOCKERS.md) und einer eindeutig
+   synthetischen `deviceUuid`. Läuft unverändert durch `addPlayer`/`kickPlayer` - ein Bot ist
+   einfach ein `Player`. Neue Nachricht `LOBBY_ADD_BOT` (additiv), Entfernen läuft über das
+   bestehende `LOBBY_KICK`.
+3. **Server-Wiring** (`server/game-server.ts`): wartet ein Spieler im Kläffkarussell länger als
+   `botFallbackMs` (Default 6s, wie der bestehende `roundTimeoutMs`-Default) ohne menschlichen
+   Gegner, wird er automatisch mit einem Bot zufälliger Schwierigkeit gepaart. Host kann in einer
+   privaten Lobby jederzeit einen Bot in einen freien Slot hinzufügen (`LOBBY_ADD_BOT`). Ist der
+   aktuelle Barker ein Bot, bellt er nach einer kurzen zufälligen Verzögerung von selbst
+   (`generateSyntheticBarkFrames` + dieselbe `finalizeRound`-Funktion wie ein echter
+   `BARK_SUBMIT` - kein zweiter Match-Pfad). Bot-Frames bauen nie eine `REPLAY_SUSPECT`-Historie
+   auf (server-generiert, per Definition vertrauenswürdig); die bestehende Anti-Cheat-Prüfung
+   selbst (`scoreBark`) ist dafür nicht angefasst worden, siehe BLOCKERS.md.
+4. **UI**: `BotBadge` (neu, nutzt ausschließlich bestehende Design-Tokens) zeigt "🤖 Bot ·
+   \<Stufe\>" auf Avatarkarte/Bühne/Ergebnis-Screen, wo diese bereits existieren - ein Bot ist
+   nie wie ein Mensch dargestellt. `LobbyScreen` bekommt eine "Bot hinzufügen"-Sektion mit drei
+   Schwierigkeitsknöpfen. Per echtem Playwright-Chromium-Lauf visuell verifiziert (Bot
+   hinzufügen, Abzeichen sichtbar, kompletter Match-Durchlauf bis SIEG!).
+5. **Tests**: 4 neue Integrationstests mit echten WebSocket-Clients in `server/game-server.test.ts`
+   (Kläffkarussell-Bot-Fallback nach Timeout, private Lobby mit Bot komplett durchgespielt, Bot
+   per `LOBBY_KICK` entfernbar). Neuer E2E-Test `e2e/solo-vs-bot.spec.ts`: ein einzelner
+   Browser-Context erstellt eine private Lobby, fügt einen Bot hinzu, spielt bis zum Ergebnis -
+   genau der Weg, mit dem der Besitzer allein am iPad ohne zweite Person testen kann (siehe
+   unten). Ein bestehender E2E-Test (`carousel-rematch.spec.ts`) brach durch die neue
+   Bot-Fallback-Logik (zwei sequenzielle ~9s-Kalibrierungen ließen den ersten Spieler länger als
+   `botFallbackMs` allein warten) - Fix: die zwei Joins laufen jetzt parallel statt sequenziell
+   (Details in BLOCKERS.md).
+
+**Umgesetzte Einsatzorte** (von den drei im Auftrag vorgeschlagenen): Kläffkarussell-Fallback
+(1) und private Lobby "Bot hinzufügen" (2) sind gebaut. Einen dedizierten Solo-/Trainingsmodus
+(3) gibt es in diesem Repo nicht (nur Kläffkarussell und private Lobby mit Duell/Rudel/Kläffduell
+existieren als Konzepte) - laut Auftrag nicht selbst erfunden, sondern übersprungen und hier
+dokumentiert. Die private Lobby mit "Bot hinzufügen" übernimmt diese Rolle faktisch bereits: der
+Besitzer kann allein eine Lobby erstellen und sofort gegen einen Bot spielen, ohne auf einen
+Timeout zu warten.
+
+**Morgen allein am iPad gegen einen Bot testen, Schritt für Schritt:**
+1. Startseite öffnen, "Private Lobby erstellen" antippen, Mikro freigeben, Kalibrierung
+   durchlaufen (wie gewohnt).
+2. In der Lobby unter "Host-Einstellungen" → "Bot hinzufügen" eine Schwierigkeit antippen (z. B.
+   "Kläffer"). Der Bot erscheint sofort als zweiter Spieler mit sichtbarem 🤖-Abzeichen.
+3. "Match starten" antippen - automatisch Duell-Modus (2 Spieler), Tauzieh-Skala erscheint.
+4. Bellen, wenn "Du bist dran!" steht - der Bot bellt von selbst nach einer kurzen Pause, kein
+   Zutun nötig.
+5. Nach dem SIEG!/NIEDERLAGE-Bildschirm "Nochmal!" für eine neue Runde gegen denselben oder
+   (Lobby verlassen + neu) einen anderen Bot.
+
+Alternativ, ganz ohne Lobby-Einstellungen: "Kläffkarussell" antippen und warten (max. 6s) - ohne
+zweiten Menschen im Karussell paart der Server automatisch mit einem zufälligen Bot.
+
+`npm run verify` (155 Tests), `npm run build` und die komplette Playwright-Suite (11 Tests,
+inklusive des neuen Solo-gegen-Bot-Tests) sind grün. Kein bestehender Code wurde umbenannt,
+verschoben oder umformuliert, außer wo für Bots zwingend nötig (siehe BLOCKERS.md für jede
+erzwungene Entscheidung).
+

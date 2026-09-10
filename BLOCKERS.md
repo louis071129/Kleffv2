@@ -338,3 +338,68 @@ dem Umbau in der gesamten Codebase permanent `null` (frueher Rundensiege beim Be
 das es nicht mehr gibt). Statt es als totes Feld im Wire-Protokoll zu belassen, komplett entfernt
 (Schema, Typen, Server, alle Standings-Konstruktoren) - kein Verhaltensunterschied, nur weniger
 irrefuehrender Code. Siehe PROGRESS.md fuer den vollen Umbau.
+
+## 2026-09-10 – Bots: virtuelle Kalibrierung, Frame-Werte empirisch statt analytisch hergeleitet
+
+`generateSyntheticBarkFrames(seed, difficulty)` nimmt bewusst KEIN Kalibrierungsprofil als
+Parameter (exakte Signatur aus dem Auftrag uebernommen) - die Zielbereiche sind "relativ zu
+einer virtuellen Bot-Kalibrierung" gemeint. Diese virtuelle Kalibrierung ist als Konstante in
+`packages/scoring/src/bot.ts` hart codiert, identisch zu `DEFAULT_CALIBRATION` in
+`server/game-server.ts` (dort schon die Kalibrierung fuer Rundentimeouts) - der Server wertet
+Bot-Frames tatsaechlich mit genau diesem Profil aus, die Zielbereiche stimmen also wirklich.
+Aendert sich `DEFAULT_CALIBRATION` im Server jemals, muessen die Bereiche in `bot.ts` neu
+kalibriert werden - dort und hier vermerkt.
+
+Die Score-Formel (`scoreBark`) hat mehrere Nichtlinearitaeten (Clamping, Rundenverlauf-
+abhaengiger Crest-Wert, Aktiv-Schwelle), die sich nicht sauber analytisch in Frame-Parameter
+zurueckrechnen lassen. Statt die Formel neu zu implementieren oder zu vereinfachen (harte Regel:
+Scoring bleibt exakt gleich), wurden die Parameterbereiche pro Schwierigkeitsstufe empirisch
+gegen die echte, unveraenderte `scoreBark`-Funktion kalibriert (Skript mit 500-1000 Stichproben,
+iterativ angepasst bis Mittelwert und Streuung in etwa den Vorgaben entsprachen) - dieselbe
+Methode, die die Tests am Ende ohnehin verlangen (200+ Stichproben, Toleranzband). Ergebnis:
+Welpe ~44 (Ziel ~45), Kläffer ~63 (Ziel ~65), Alptraum-Dogge ~83 (Ziel ~82), Streuung sinkt wie
+gefordert Welpe > Kläffer > Alptraum-Dogge.
+
+## 2026-09-10 – Bots: Avatar-Accessoire-Liste war bereits voll (10/10 Plaetze belegt)
+
+Auftrag schlaegt vor, ein neues Accessoire (z. B. "Robo-Anhaenger") fuer Bots zu ergaenzen, falls
+das Repo bereits eine Accessoire-Liste hat. Hat es (`components/Avatar.tsx`, `accessoryOverlay`,
+Werte 1-10, alle zehn bereits vergeben: Sonnenbrille, Kappe, Zahnspange, Zigarre, Heiligenschein,
+Kopfhoerer, Blume, Verband, Krone, Bauhelm). Zwei Optionen abgewogen: (a) die `accessory`-Spanne
+in `AvatarSeedSchema` von 0-10 auf 0-11 erweitern und Wert 11 fuer Bots reservieren, oder (b) auf
+das ohnehin geforderte BOT-Abzeichen als alleinigen Erkennungsweg setzen. Gegen (a) entschieden:
+das haette die gueltige Accessoire-Spanne fuer ALLE Spieler (auch echte) erweitert, und ein
+echter Spieler haette den "Bot-Look" theoretisch zufaellig auch wuerfeln koennen - widerspricht
+Regel 10 (Bots muessen IMMER eindeutig erkennbar sein, nie ueber ein Merkmal, das auch ein Mensch
+haben kann). Stattdessen: `createBotAvatarSeed` zieht Kopfform/Ohren/Fellfarbe/Augen aus einem
+kleineren, konstanten Wertebereich (separate "Bot-Optik", wie im Auftrag als Alternative
+vorgeschlagen), `accessory` bleibt immer 0, das `BotBadge` ist der einzige verlaessliche
+Erkennungsweg. `components/Avatar.tsx` selbst wurde nicht angefasst.
+
+## 2026-09-10 – Bots: dritter vorgeschlagener Einsatzort (Solo-/Trainingsmodus) existiert nicht
+
+Der Auftrag nennt einen optionalen "Solo-/Trainingsmodus (falls vorhanden)" als dritten
+moeglichen Einsatzort fuer Bots, ausdruecklich mit der Anweisung, ihn zu ueberspringen und zu
+dokumentieren statt ihn zu erfinden, falls das Repo dieses Konzept nicht hat. Es hat es nicht:
+das Spiel kennt nur Kläffkarussell (Zufalls-Matchmaking) und private Lobby (Duell/Rudel/
+Kläffduell) - kein eigenstaendiger "gegen die eigene Bestleistung"-Modus. Nicht gebaut. Die
+private Lobby mit "Bot hinzufügen" deckt den eigentlichen Bedarf dahinter (allein spielen können)
+bereits ab, siehe PROGRESS.md.
+
+## 2026-09-10 – Bots: Kläffkarussell-Fallback brach einen bestehenden E2E-Test
+
+`carousel-rematch.spec.ts` joint zwei Spieler sequenziell (`await joinCarousel(a); await
+joinCarousel(b);`), jeder Join braucht eine echte ~9s-Kalibrierung. Mit dem neuen
+Kläffkarussell-Bot-Fallback (Default `botFallbackMs` 6s, produktiv nicht ueberschrieben in
+E2E-Tests) stand Spieler A dadurch laenger als 6s allein in der Warteschlange, bevor B ueberhaupt
+fertig kalibriert war - der Server paarte A faelschlich mit einem Bot, und als B kurz danach
+selbst 6s allein wartete, ebenfalls mit einem (anderen) Bot statt mit A. Der Test schlug fehl,
+weil beide in unterschiedlichen Matches landeten (bestaetigt per Screenshot: Spieler B im Match
+gegen "Welpe Keks"). Das ist explizit der Fall aus der harten Regel 3 ("bestehende Tests bleiben
+gruen, ausser ein Test testet ein durch Bots absichtlich erweitertes Verhalten") - dieser Test
+testet zwei echte Menschen, keine Bots. Fix: die zwei Joins laufen jetzt parallel
+(`Promise.all`) statt sequenziell, dadurch kalibrieren beide etwa gleichzeitig und keiner wartet
+laenger als ein paar Sekunden allein - unter der `botFallbackMs`-Schwelle. Kein anderer
+bestehender E2E-Test joint den Kläffkarussell (geprueft), also isolierter Fix. Nach dem Fix:
+komplette E2E-Suite (11 Tests) zweimal hintereinander gruen, `carousel-rematch.spec.ts` allein
+zusaetzlich zweimal separat gruen (Reproduzierbarkeits-Check, kein Flake).
