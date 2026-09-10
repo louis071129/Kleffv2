@@ -701,3 +701,95 @@ inklusive des neuen Solo-gegen-Bot-Tests) sind grün. Kein bestehender Code wurd
 verschoben oder umformuliert, außer wo für Bots zwingend nötig (siehe BLOCKERS.md für jede
 erzwungene Entscheidung).
 
+## 2026-09-10 – Live-Umbau: durchgehendes Bellen statt Runden/Knopf
+
+Nutzer-Feedback: "Prinzip ist so dass man versucht länger und lauter als der Gegner zu bellen
+und dies sich in der Tauzieh-Skala bemerkbar macht, heißt ohne Knopf 'Bellen' - einfach ein
+Spiel, wo der, der am lautesten und länger durchhält, dadurch gewinnt." Zwei
+Scoping-Rückfragen gestellt: (1) technischer Ablauf - "durchgehend live, ganzes Match"
+gewählt (Mikros laufen fürs gesamte Match, kein Rundenkonzept mehr), statt wiederholter
+kurzer Simultan-Fenster; (2) Geltungsbereich - "wirklich überall, auch Rudel" gewählt, nicht
+nur die 2-Spieler-Situationen. Das ist ein vollständiger Ersatz des Kern-Matchmechanismus, keine
+Erweiterung - der bisherige rundenbasierte Ablauf (BELL-Knopf, 3s-Bellfenster, `Match`/
+`RoundResult`, `currentBarker`) ist komplett durch eine tick-basierte, kontinuierliche Engine
+ersetzt worden.
+
+1. **Kernmechanik** (`packages/scoring/src/live-intensity.ts` + `packages/protocol/src/
+   live-match.ts`, beide neu): der Server berechnet alle 150ms pro Spieler aus den seit dem
+   letzten Tick eingegangenen echten `AudioFrame`s eine Intensität 0-100
+   (`computeLiveIntensity` - Lautstärke relativ zur persönlichen Kalibrierung, `MIC_OVERLOAD`-
+   Deckelung bei Clipping, `CALIBRATION_MISMATCH`-Flag, bewusst **keine** Anti-Heul-Abwertung,
+   da jetzt genau das Gegenteil gewünscht ist) und addiert sie zur laufenden Gesamtpunktzahl
+   (`applyLiveTick`) - "länger durchhalten" fällt allein aus dieser Zeit-Integration heraus,
+   keine eigene Dauer-Logik nötig. Eine Formel für **beide** Match-Formen: bei "tugofwar"
+   (2 Spieler) ist die Seilposition die Differenz der beiden Gesamtpunktzahlen (endet sofort
+   bei ±100), bei "rudel" (3+ Spieler) akkumuliert jeder unabhängig über eine feste Matchdauer
+   (18s), Rangliste danach nach Gesamtpunktzahl. Deterministischer Sudden-Death-Fallback nach
+   25s bei echtem Tauzieh-Patt (nie zufällig - bei exaktem Seilstand 0 wird auch danach nicht
+   entschieden, mit eigenem Unit- und Integrationstest bewiesen). 15 neue Protokoll-Tests,
+   11 neue Scoring-Tests.
+2. **Protokoll-Aufräumen**: `packages/protocol/src/match.ts` und `tug-of-war.ts` (die gesamte
+   diskrete Rundenlogik: `Match`, `RoundResult`, `currentBarker`, `submitRoundResult`,
+   `computeTugOfWarState` und ihre Tests) sind komplett entfernt statt als totes Gerüst liegen
+   zu bleiben - dieselbe Begründung wie beim `wins`-Feld im Tauzieh-Umbau: sobald wirklich
+   **alle** Modi kontinuierlich laufen, ist die diskrete Variante genuin unerreichbar. Schema:
+   `BARK_SUBMIT`/`ROUND_STARTED`/`ROUND_RESULT` entfernt, `MATCH_STARTED` trägt jetzt
+   `participantIds` statt `playerOrder`/`totalRounds`, neue Nachricht `LIVE_MATCH_UPDATE`
+   (tickweise Scores + Seilposition), `AUDIO_BLOB_SUBMIT`/`BROADCAST` nutzen `chunkSeq` statt
+   `roundIndex`. `scoreBark` selbst bleibt unverändert samt alter Tests im Repo - in sich
+   stimmige, getestete Logik, nur nicht mehr die Wertungsgrundlage laufender Matches (siehe
+   BLOCKERS.md).
+3. **Server** (`server/game-server.ts`, größter Einzelumbau): die komplette Rundenmaschinerie
+   (`startRound`/`handleRoundTimeout`/`handleBarkSubmit`/`finalizeRound`/Rundentimer) ist durch
+   einen `setInterval`-Tick pro laufendem Match ersetzt, der die rollierenden Frame-Puffer jedes
+   Teilnehmers liest, `computeLiveIntensity` aufruft, akkumuliert, `LIVE_MATCH_UPDATE`
+   broadcastet und bei `isLiveMatchFinished` mit `MATCH_RESULT` beendet. Bots bellen jetzt
+   kontinuierlich statt einmalig: pro Tick wird ein kurzer Frame-Batch aus einem wiederholten,
+   fortlaufend neu geseedeten `generateSyntheticBarkFrames`-Zyklus entnommen (`nextBotFrames`) -
+   läuft durch **dieselbe** `computeLiveIntensity` wie ein echter Spieler, kein zweiter
+   Wertungspfad, exakt dasselbe Prinzip wie beim ursprünglichen einmaligen Bot-Bark. Kläffkarus-
+   sell-Bot-Fallback, `LOBBY_ADD_BOT`, Bracket-Paarung (`bracket.ts`), Reconnect/Presence/
+   Report/Nickname-Filter bleiben in ihrer Logik unangetastet, nur wie ein Matchup entschieden
+   wird ändert sich.
+4. **Client-Audio**: `captureBarkWindow` (3s-Fenster) ist durch `startLiveBarking()`/
+   `stopLiveBarking()` ersetzt - startet/stoppt nur das bereits vorhandene kontinuierliche
+   `pipeline.onFrame()`-Streaming für die gesamte Matchdauer, keine neue Audio-Infrastruktur
+   nötig. "Echter Ton" (private Lobbys) läuft jetzt als durchgehende Chunk-Aufnahme
+   (`MediaRecorder.start(timesliceMs)`, alle 300ms ein Chunk, Reihenfolge über eine Promise-
+   Kette garantiert) statt einem Blob pro Runde - auf Empfängerseite spielt ein neuer
+   `LiveAudioPlayer` (MediaSource + SourceBuffer) die Chunks lückenlos ab, mit einer eigenen
+   Instanz pro sendendem Spieler (Rudel kann mehrere gleichzeitig Sendende haben) - fällt still
+   auf stumm zurück, wenn der Browser MediaSource/den Codec nicht unterstützt.
+5. **UI**: kein BELL-Knopf mehr, kein Barker/Publikum-Konzept - `MatchScreen` zeigt alle
+   Teilnehmer gleichzeitig mit Live-Mundanimation (unverändertes `LEVEL_BROADCAST`, rein
+   kosmetisch, war schon immer so). `TugOfWarBar` und `RudelProgress` sind **komplett
+   unverändert wiederverwendet**, nur jetzt aus einem neuen `liveMatch`-Store-Feld gespeist
+   (befüllt per `LIVE_MATCH_UPDATE`) statt aus historischen Rundenergebnissen - eine deutliche
+   Scope-Reduktion, weil beide Komponenten von Anfang an mit generischen Daten-Props gebaut
+   waren. `ScoreReveal` ist aus dem Match-Flow entfernt (kein diskretes Rundenergebnis mehr
+   anzuzeigen), die Komponente selbst bleibt ungenutzt im Repo. `ResultScreen` liest jetzt
+   `cumulativeScore` statt `score.total`/`aggregateTotal`; für die Kläffduell-Gesamtplatzierung
+   (die nie einen einzelnen Score hatte, nur eine Ausscheidungsrunde) zeigt es bewusst "-" statt
+   einer irreführenden 0.
+6. **Tests**: `server/game-server.test.ts` komplett auf den Tick-Mechanismus umgestellt (21
+   Tests: kontinuierliches `BARK_FRAME`-Streaming statt `BARK_SUBMIT`/Rundenschleifen, ein Test
+   beweist explizit den deterministischen Sudden-Death-Fallback bei echtem Patt). Dabei einen
+   echten, vorbestehenden Bug im Test-Harness gefunden und behoben: `TestClient.waitFor()` trug
+   sich bei Timeout nicht aus der Warteliste aus, sodass eine spätere echte Nachricht desselben
+   Typs vom bereits verworfenen Waiter stillschweigend verschluckt wurde, statt den nächsten,
+   noch wartenden `waitFor()`-Aufruf zu erreichen - fiel erst hier auf, weil der neue
+   Sudden-Death-Test als erster einen erwarteten Timeout mit einem zweiten Warten auf denselben
+   Nachrichtentyp kombiniert. E2E-Specs (`carousel-rematch.spec.ts`, `two-player-match.spec.ts`,
+   `solo-vs-bot.spec.ts`) ersetzen den BELL-Klick-Loop durch ein einfaches `waitForMatchResult`
+   (wartet nur noch auf SIEG!/NIEDERLAGE, die Fake-Audio-Datei liefert ohnehin durchgehend
+   Pegel). Beim manuellen E2E-Lauf einen echten UI-Bug gefunden und behoben: die neue
+   Spieler-Grid-Ansicht zeigte "(Du)" zusätzlich zur bereits vorhandenen "(Du)"-Markierung in
+   `TugOfWarBar`/`RudelProgress` - entfernt, die Kennzeichnung bleibt an der einen Stelle.
+
+`npm run verify` (166 Tests), `npm run build` und die komplette Playwright-Suite (inklusive
+aller drei angepassten Match-Specs) sind nach dem kompletten Umbau grün. Wegen der
+Querschnitts-Natur dieses Umbaus (Protokoll+Server+Client-Audio+UI teilen sich einen root-
+`tsconfig.json`-Typecheck) lief das als ein durchgehender, unfertiger Zwischenstand statt als
+mehrere einzeln grüne Zwischen-Commits - genau wie beim ursprünglichen
+Kläffkarussell-Protokoll-Umbau in Phase 3.
+

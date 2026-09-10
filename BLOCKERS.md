@@ -403,3 +403,83 @@ laenger als ein paar Sekunden allein - unter der `botFallbackMs`-Schwelle. Kein 
 bestehender E2E-Test joint den Kläffkarussell (geprueft), also isolierter Fix. Nach dem Fix:
 komplette E2E-Suite (11 Tests) zweimal hintereinander gruen, `carousel-rematch.spec.ts` allein
 zusaetzlich zweimal separat gruen (Reproduzierbarkeits-Check, kein Flake).
+
+## 2026-09-10 – Live-Umbau: REPLAY_SUSPECT entfaellt ersatzlos
+
+Der Nutzer verlangt den Wechsel von rundenbasiertem auf durchgehendes, kontinuierliches Bellen
+(kein Knopf, alle bellen ab Matchstart gleichzeitig). Der bisherige `REPLAY_SUSPECT`-Anti-Cheat-
+Mechanismus (RMS-Huellkurve einer Runde korreliert mit einer frueheren Runde desselben Spielers)
+setzt zwingend diskrete, abgrenzbare "Runden" voraus, mit denen verglichen werden kann. Sobald
+alle Modi kontinuierlich laufen, gibt es dieses Konzept nicht mehr - der Mechanismus wurde
+ersatzlos entfernt (nicht durch ein Aequivalent ersetzt, da eine sinnvolle Entsprechung
+"Korrelation zweier beliebiger Zeitfenster im selben Match" eine substanziell neue, ungetestete
+Anti-Cheat-Heuristik waere, die der Auftrag nicht verlangt hat). `AntiCheatFlag` behaelt den
+Enum-Wert `REPLAY_SUSPECT` (weiterhin von `scoreBark` erzeugbar, das unveraendert bleibt), aber
+`computeLiveIntensity` erzeugt ihn nie. `MIC_OVERLOAD` und `CALIBRATION_MISMATCH` bleiben aktiv,
+jetzt pro Tick statt pro Runde geprueft. Siehe PROGRESS.md fuer den vollen Umbau.
+
+## 2026-09-10 – Live-Umbau: AGC-Fairness-Kompensation faellt mit der neuen Live-Formel weg
+
+Die bisherige `scoreBark`-Funktion verschob im erkannten AGC-Modus (Safari/iOS ignoriert
+`autoGainControl: false` oft) Gewicht von der Lautstaerke-Komponente zu Attack/Crest (die AGC
+weniger beeinflusst) - eine bewusste Fairness-Massnahme. Die neue `computeLiveIntensity` bewertet
+nur noch den Peak relativ zur Kalibrierung (keine Attack/Crest/Bell-Charakter-Komponenten mehr,
+da diese Werte pro 150ms-Tick aus wenigen Frames kaum sinnvoll berechenbar sind und der Auftrag
+explizit nur noch "lauter und laenger" verlangt). Damit gibt es fuer den neuen Live-Mechanismus
+keine AGC-Kompensation mehr. Nicht stillschweigend uebernommen oder verschwiegen, sondern hier
+und im README ("Fairness"-Abschnitt) als bewusste, dem Nutzer transparent gemachte Einschraenkung
+dokumentiert - das AGC-Hinweis-Badge im UI bleibt bestehen (reine Information), nur die
+score-seitige Kompensation dahinter ist weg.
+
+## 2026-09-10 – Live-Umbau: Bot-Zielwerte bleiben auf die alte scoreBark-Kalibrierung bezogen
+
+Die drei Bot-Schwierigkeitsstufen (`packages/scoring/src/bot.ts`) wurden im vorherigen Bots-Auftrag
+empirisch gegen `scoreBark` kalibriert (Score-Mittelwerte ~45/~65/~82). `scoreBark` ist jetzt
+nicht mehr die Wertungsgrundlage - `computeLiveIntensity` bewertet nur noch den Peak. Entscheidung:
+`generateSyntheticBarkFrames`/`bot.ts` NICHT neu kalibrieren oder umbauen (waere eine Aenderung an
+bereits getesteter, funktionierender Logik ohne zwingenden Grund) - die bestehenden
+`peakDbfsRange`-Bereiche pro Stufe (Welpe leiser/variabler, Alptraum-Dogge lauter/konstanter)
+erzeugen unter `computeLiveIntensity` weiterhin die gewuenschte relative Differenzierung, da die
+neue Formel denselben Peak-relativ-zur-Kalibrierung-Grundgedanken hat wie die Lautstaerke-
+Komponente der alten. Die Nebenkomponenten der Bot-Tuning (`attackMsRange`, `crestDbRange`,
+`centroidHzRange`, `flatnessRange`) werden von der neuen Live-Wertung schlicht ignoriert, bleiben
+aber unveraendert im Code (kein toter Code im strengen Sinn - `generateSyntheticBarkFrames` selbst
+bleibt unveraendert und wird auch von `packages/scoring/test/bot.test.ts` weiterhin gegen
+`scoreBark` getestet, das ja ebenfalls unveraendert bleibt).
+
+## 2026-09-10 – Live-Umbau: kontinuierliches Bot-Bellen durch Wiederholung des bestehenden Ein-Bell-Generators
+
+Der bisherige `generateSyntheticBarkFrames` erzeugt eine einzelne Bell-Huellkurve (Vor-Stille,
+Attack, Plateau, Abfall, Nach-Stille) fuer genau EINEN Bell - passend zum alten, rundenbasierten
+Modell. Fuer kontinuierliches Bellen braucht ein Bot ein sich wiederholendes Bark/Pause-Muster.
+Entscheidung: die bestehende Funktion NICHT umbauen (waere eine Verhaltensaenderung an
+getesteter Logik), sondern ihre Ausgabe als EINEN Zyklus behandeln und wiederholt aneinander-
+haengen (`nextBotFrames` in `server/game-server.ts`), mit fortlaufend neuem Seed pro Zyklus
+(`${matchId}:${playerId}:${cycleIndex}`) fuer natuerliche Variation statt exakter Wiederholung.
+Die eingebaute Vor-/Nach-Stille jedes Zyklus ergibt automatisch das gewuenschte
+Bark-Pause-Bark-Pause-Muster, ohne eine neue Musterlogik zu erfinden.
+
+## 2026-09-10 – Live-Umbau: Sudden-Death/Rudel-Zeitkonstanten fuer Tests konfigurierbar gemacht
+
+`TUG_OF_WAR_SUDDEN_DEATH_MS` (25s) und `RUDEL_LIVE_DURATION_MS` (18s) sind wall-clock-Konstanten,
+anders als die fruehere Rundenzahl, die ein Test durch schnelles Senden vieler `BARK_SUBMIT`
+beliebig beschleunigen konnte. Ein Test kann eine 18s-Wartezeit nicht sinnvoll mitmachen.
+Entscheidung: `isLiveMatchFinished`/`ropePositionOf` (`packages/protocol/src/live-match.ts`)
+bekommen ein optionales Tuning-Objekt (`tugOfWarThreshold`/`suddenDeathMs`/`rudelDurationMs`),
+Default bleibt exakt der bisherige Wert; `GameServerOptions` bekommt passende optionale Felder,
+die nur in Tests gesetzt werden (Produktivbetrieb nutzt immer die Server-Defaults, die wiederum
+exakt den Protokoll-Konstanten entsprechen). Kein Verhaltensunterschied im Produktivbetrieb,
+reine Testbarkeit - dasselbe Prinzip wie das bereits bestehende `roundTimeoutMs`/`tickIntervalMs`
+im alten System.
+
+## 2026-09-10 – Live-Umbau: vorbestehender Bug im Integrationstest-Harness gefunden
+
+`TestClient.waitFor()` in `server/game-server.test.ts` entfernte einen Waiter bei Timeout nicht
+aus der internen Warteliste. Ein Test, der einen erwarteten Timeout ("kein MATCH_RESULT
+innerhalb von X ms") mit einem zweiten, spaeteren `waitFor()` desselben Nachrichtentyps
+kombiniert (neuer Sudden-Death-Test, der erste dieser Art im Repo), lief dadurch selbst dann in
+einen Timeout, wenn die echte Nachricht laengst angekommen war - der abgelaufene, aber noch in
+der Liste stehende Waiter fing sie zuerst ab und loeste sein bereits verworfenes Promise
+folgenlos auf, statt sie in den `received`-Puffer zu legen. Fix: der Waiter traegt sich bei
+seinem eigenen Timeout selbst aus der Liste aus, bevor er ablehnt. Kein Produktionscode
+betroffen, reiner Test-Harness-Bug, der vorher schlicht nie auf diese Weise getriggert wurde.

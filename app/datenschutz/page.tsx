@@ -170,13 +170,15 @@ export default function DatenschutzPage(): React.ReactElement {
           Geräte-Kennung (siehe Abschnitt 5).
         </p>
         <p>
-          Während der 3-sekündigen Bell-Runde überträgt dein Browser
-          <strong> immer</strong>, unabhängig vom Modus, bis zu 200 kleine
-          Messwert-Pakete live in Echtzeit: einen Zeitstempel sowie aus dem
-          Mikrofonsignal <strong>lokal in deinem Browser</strong> berechnete
-          Kennzahlen (Lautstärke-Spitzenwert und -Effektivwert in dBFS,
-          spektraler Schwerpunkt, spektrale Flachheit). Zweck ist die
-          serverseitige, manipulationssichere Berechnung deines Bell-Scores
+          Sobald ein Match beginnt, überträgt dein Browser
+          <strong> immer</strong>, unabhängig vom Modus,{" "}
+          <strong>durchgehend für die gesamte Matchdauer</strong> kleine
+          Messwert-Pakete live in Echtzeit (etwa 50 pro Sekunde): einen
+          Zeitstempel sowie aus dem Mikrofonsignal{" "}
+          <strong>lokal in deinem Browser</strong> berechnete Kennzahlen
+          (Lautstärke-Spitzenwert und -Effektivwert in dBFS, spektraler
+          Schwerpunkt, spektrale Flachheit). Zweck ist die serverseitige,
+          manipulationssichere Berechnung deiner laufenden Lautstärke-Wertung
           (Art. 6 Abs. 1 lit. b DSGVO, Durchführung des von dir gestarteten
           Spiels, bzw. lit. f, berechtigtes Interesse an fairem Scoring) und –
           nur wenn relevant – die Live-Wiedergabe des computergenerierten
@@ -201,14 +203,15 @@ export default function DatenschutzPage(): React.ReactElement {
           <li>
             <strong>Private Lobby</strong> (nur mit Leuten, die du
             einlädst): Hier läuft <strong>standardmäßig echter Ton</strong>.
-            Dein Browser nimmt das 3-Sekunden-Bellfenster komprimiert auf
-            (WebM/Opus, niedrige Bitrate) und schickt die Aufnahme an den
-            Server, der sie unverändert an alle anderen Mitglieder{" "}
+            Dein Browser nimmt für die gesamte Matchdauer durchgehend
+            komprimierten Ton auf (WebM/Opus, niedrige Bitrate) und schickt
+            ihn in kurzen Chunks (alle 300ms) laufend an den Server, der jeden
+            Chunk unverändert an alle anderen Mitglieder{" "}
             <strong>derselben Lobby</strong> weiterleitet – zur Wiedergabe,
             nicht zur Wertung (die läuft ausschließlich über die Messwerte
-            oben). Der Server speichert die Aufnahme zu keinem Zeitpunkt,
-            auch nicht kurzzeitig: er reicht sie beim Empfang direkt weiter
-            und behält keine Kopie. Der Host kann „Echter Ton“ in den
+            oben). Der Server speichert keinen Chunk zu irgendeinem Zeitpunkt,
+            auch nicht kurzzeitig: er reicht jeden Chunk beim Empfang direkt
+            weiter und behält keine Kopie. Der Host kann „Echter Ton“ in den
             Lobby-Einstellungen jederzeit für alle abschalten – dann läuft
             auch dort der Bell-Sound wie im Kläffkarussell. Unterstützt dein
             Browser die nötige Aufnahmefunktion nicht (z. B. manche
@@ -298,9 +301,9 @@ export default function DatenschutzPage(): React.ReactElement {
               <td>Dauer der Verbindung/des Matches</td>
             </tr>
             <tr>
-              <td>Audio-Messwerte einer Bell-Runde</td>
+              <td>Audio-Messwerte/Echter-Ton-Chunks während eines Matches</td>
               <td>Arbeitsspeicher des Servers</td>
-              <td>nur während der Auswertung der jeweiligen Runde</td>
+              <td>nur beim Durchleiten, keine Zwischenspeicherung</td>
             </tr>
             <tr>
               <td>Echter-Ton-Aufnahme (nur private Lobby, wenn aktiv)</td>

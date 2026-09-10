@@ -1,8 +1,11 @@
 # KLÄFF
 
-Multiplayer-Bell-Wettkampf im Browser. Spieler treten gegeneinander an, indem sie drei
-Sekunden ins Mikrofon bellen. Ein **server-seitiges** Scoring-System bewertet Lautstärke,
-Attack, Punch und Bell-Charakter – der beste Bell gewinnt die Runde. Zwei grundverschiedene
+Multiplayer-Bell-Wettkampf im Browser. Kein Knopf, kein Abwechseln: sobald ein Match beginnt,
+bellen alle Beteiligten gleichzeitig und durchgehend ins Mikrofon – wer **lauter und länger
+durchhält**, gewinnt, live sichtbar auf einer Tauzieh-Skala bzw. einer Rudel-Rangliste. Ein
+**server-seitiges** Wertungssystem berechnet dafür alle 150ms aus den echten Feature-Frames
+jedes Spielers eine Lautstärke-Intensität und summiert sie über die Matchdauer auf
+(`computeLiveIntensity`, `packages/scoring/src/live-intensity.ts`). Zwei grundverschiedene
 Wege, das zu tun:
 
 - **Kläffkarussell** – Zufalls-Matchmaking mit Fremden, sofortiges 1v1, automatisches
@@ -11,16 +14,20 @@ Wege, das zu tun:
   (`packages/bark-synth`).
 - **Private Lobby** – Code-basiert, nur mit eingeladenen Leuten. Hier läuft standardmäßig
   echter, unveränderter Ton. Flexible Spielerzahl (2–8), vom Host konfigurierbar: Duell
-  (2 Spieler), Kläffduell (K.-o.-Bracket) oder Rudel (Ranking über 3 Runden).
+  (2 Spieler), Kläffduell (K.-o.-Bracket) oder Rudel (3+ Spieler gleichzeitig).
 
 Jede echte 1v1-Situation (Kläffkarussell-Begegnung, Duell, jedes Kläffduell-Matchup) ist ein
-**Tauzieh**: eine Skala von -100 (Gegner führt voll) bis +100 (ich führe voll), jeder Bark
-zieht sie um `score.total - 50` zur eigenen Seite, das Match endet sofort und sichtbar, sobald
-eine Seite ±100 erreicht (`packages/protocol/src/tug-of-war.ts`). Kein fester Rundenzähler,
-kein Unentschieden, nie ein zufälliges Ergebnis – bei echtem Gleichstand entscheidet ab Runde
-14 deterministisch die erste Runde, die das Patt bricht (Sudden-Death-Fallback, nicht
-Zufall). Rudel ist kein 2-Seiten-System (3+ Spieler) und bleibt daher ein Ranking über 3
-Zyklen, bekommt aber dieselbe Live-Rangliste als Fortschrittselement (`components/RudelProgress.tsx`).
+**Tauzieh**: eine Skala von -100 (Gegner führt voll) bis +100 (ich führe voll). Jeder Tick
+addiert die aktuelle Lautstärke-Intensität jedes Spielers zu dessen laufender Gesamtpunktzahl,
+das Seil ist die Differenz der beiden – "länger durchhalten" ergibt sich allein aus dieser
+Zeit-Integration, ohne eigene Dauer-Logik. Das Match endet sofort und sichtbar, sobald eine
+Seite ±100 erreicht (`packages/protocol/src/live-match.ts`). Kein fester Rundenzähler, kein
+Unentschieden, nie ein zufälliges Ergebnis – bei echtem Gleichstand entscheidet nach
+`TUG_OF_WAR_SUDDEN_DEATH_MS` (25s) deterministisch, wer gerade vorne liegt (steht das Seil
+exakt bei 0, wird auch nach dieser Zeit nicht zufällig entschieden). Rudel ist kein
+2-Seiten-System (3+ Spieler gleichzeitig): jeder akkumuliert unabhängig über eine feste
+Matchdauer (`RUDEL_LIVE_DURATION_MS`, 18s), Rangliste nach Gesamtpunktzahl, live als
+Fortschrittselement sichtbar (`components/RudelProgress.tsx`).
 
 ## Schnellstart
 
@@ -94,10 +101,11 @@ Nachrichten vom `KlaeffClient` (`lib/ws-client.ts`) reagiert.
 4. **Kläffkarussell**: sofortiges 1v1 mit dem am längsten wartenden Gegner, kein Countdown.
    *Oder* **Private Lobby**: 6-stelliger Code, Host konfiguriert Spielerzahl (2–8), Modus
    und "Echter Ton", startet manuell.
-5. **Match**: abwechselnd/nacheinander wird gebellt. Kläffkarussell, Duell und jedes
-   Kläffduell-Matchup sind Tauzieh (dynamische Rundenzahl, endet sofort bei ±100 auf der
-   Seil-Skala); Rudel bleibt bei 3 Runden pro Spieler, Ranking nach Score-Summe. Der Server
-   wertet jede Runde sofort aus und broadcastet das Ergebnis an alle.
+5. **Match**: kein Knopf, kein Abwechseln – alle bellen ab Matchstart gleichzeitig und
+   durchgehend. Kläffkarussell, Duell und jedes Kläffduell-Matchup sind Tauzieh (endet sofort
+   bei ±100 auf der Seil-Skala); Rudel läuft eine feste Matchdauer, Ranking nach
+   Gesamtpunktzahl. Der Server wertet alle 150ms neu aus und broadcastet den Stand live an
+   alle.
 6. **Ergebnis**: Tauzieh-Matches zeigen sofort SIEG!/NIEDERLAGE, Rudel ein Podium/Rangliste.
    Im Kläffkarussell "Nächster Gegner" (neue Begegnung) oder "Kläffkarussell verlassen"; in
    privaten Lobbys "Nochmal!" zurück in die Lobby – jeweils ohne erneute Kalibrierung.
@@ -117,53 +125,60 @@ Unit-Tests): `noiseFloorDbfs` (Median der Stille), `refVoiceDbfs` (75. Perzentil
 Sprechstimme, informativ), `maxObservedDbfs` (Peak des Test-Bells) → `headroomDb`. Ist der
 Headroom kleiner als 12 dB, wird die Kalibrierung abgelehnt ("Mikro hört fast nichts").
 
-Der eigentliche Score (`packages/scoring/src/score.ts`, `scoreBark()`) normalisiert die
-Lautstärke-Komponente relativ zu diesem persönlichen Headroom, nicht zu einem absoluten Wert.
-**Der wichtigste Test im Repo** (`packages/scoring/test/score.test.ts`, "FAIRNESS") beweist
-das: ein leises Bellen mit passender (leiser) Kalibrierung schlägt ein lautes Schreien mit
-lauter Kalibrierung – die Lautstärke allein entscheidet nicht, Attack/Punch/Bell-Charakter
-tun es mit.
+Die Live-Intensität (`computeLiveIntensity`, siehe "Die Live-Wertung im Detail" unten)
+normalisiert die Lautstärke ebenfalls relativ zu diesem persönlichen Headroom, nicht zu einem
+absoluten Wert – ein Handy mit lauter Kalibrierung gewinnt nicht automatisch gegen eines mit
+leiser. Die frühere, rundenbasierte `scoreBark()`-Funktion (`packages/scoring/src/score.ts`)
+bewertete zusätzlich Attack/Crest/Bell-Charakter, damit ein leises, präzises Bellen ein lautes,
+ungeformtes Schreien schlagen konnte – **der wichtigste Test im Repo**
+(`packages/scoring/test/score.test.ts`, "FAIRNESS") beweist das weiterhin für `scoreBark()`
+selbst, ist aber für die aktuelle Live-Wertung der Matches nicht mehr die Wertungsgrundlage
+(siehe unten).
 
 **Safari auf iOS ignoriert `autoGainControl: false` regelmäßig.** Wird das erkannt
-(`track.getSettings()` nach der Anfrage geprüft, nicht die Anfrage selbst vertraut), stützt
-sich die Lautstärke-Wertung stärker auf Attack und Crest (die AGC weniger beeinflusst), und
-im UI erscheint ein Hinweis-Badge ("Dein Browser regelt die Lautstärke automatisch nach.
-Wertung läuft im Ausgleichsmodus."). Ein Unit-Test beweist, dass der AGC-Modus die Rangfolge
-zwischen einem lauten Bellen und einem Schreien nicht umkehrt.
+(`track.getSettings()` nach der Anfrage geprüft, nicht die Anfrage selbst vertraut), erscheint
+im UI weiterhin ein Hinweis-Badge ("Dein Browser regelt die Lautstärke automatisch nach.
+Wertung läuft im Ausgleichsmodus."). Die Live-Intensität selbst hat dafür **keine** eigene
+Kompensation mehr (anders als das frühere `scoreBark`, das im AGC-Modus Gewicht von Lautstärke
+zu Attack/Crest verschob) – eine bewusst dokumentierte Einschränkung des neuen, rein
+lautstärkebasierten Mechanismus, siehe BLOCKERS.md.
 
-### Der Score im Detail
+### Die Live-Wertung im Detail
 
-`scoreBark(frames, calibration)` bewertet vier Komponenten (100 Punkte insgesamt, im
-AGC-Modus 35/27.5/22.5/15 statt 50/20/15/15):
+`computeLiveIntensity(frames, calibration)` (`packages/scoring/src/live-intensity.ts`) läuft
+alle 150ms pro Spieler über dessen seit dem letzten Tick eingegangene Feature-Frames: nur
+Frames über der Aktiv-Schwelle (Rauschboden + 10dB RMS) zählen, der lauteste Peak darunter wird
+relativ zur persönlichen Kalibrierung auf 0–100 normiert. Bewusst **keine** Anti-Heul-Abwertung
+(anders als die frühere rundenbasierte Wertung) – das Ziel ist jetzt ausdrücklich, langes
+Durchhalten zu belohnen, nicht zu bestrafen. Das Ergebnis wird jeden Tick zur laufenden
+Gesamtpunktzahl addiert (`applyLiveTick`, `packages/protocol/src/live-match.ts`); "länger
+durchhalten" fällt allein aus dieser Zeit-Integration heraus.
 
-1. **Lautstärke** – Peak relativ zur Kalibrierung.
-2. **Attack** – wie schnell die Lautstärke vom Ansatz zum Peak steigt (≤60 ms = voll, ≥400 ms
-   = null).
-3. **Crest/Punch** – Differenz zwischen Peak und mittlerem Pegel der aktiven Phase.
-4. **Bell-Charakter** – spektraler Schwerpunkt nahe 1400 Hz (Gauß-Glocke) und spektrale
-   Flachheit im mittleren Bereich (weder reiner Ton noch reines Rauschen).
-
-Dauer-Korrekturen: sehr kurze aktive Phasen (<120 ms) werden abgewertet (Faktor 0.6), sehr
-lange durchgehende Aktivität (>2200 ms, "Heulen") ebenfalls (Faktor 0.85). Alle Formeln,
-Konstanten und die Begründung dahinter stehen im Detail in `packages/scoring/src/score.ts`.
+Die frühere, rundenbasierte `scoreBark(frames, calibration)`-Funktion (Lautstärke/Attack/
+Crest/Bell-Charakter, 100 Punkte, `packages/scoring/src/score.ts`) bewertet weiterhin ein
+einzelnes 3-Sekunden-Bellfenster und ist vollständig samt Tests erhalten – sie ist aber **nicht
+mehr die Wertungsgrundlage laufender Matches**, seit alle Modi kontinuierlich statt
+rundenbasiert laufen. Sie bleibt als in sich stimmige, getestete Domänen-Logik im Repo (z.B.
+für ein mögliches künftiges Kalibrierungs-Feedback), siehe BLOCKERS.md.
 
 Der Client misst Audio (unvermeidbar – nur er hat Mikrofonzugriff), aber **nur der Server
-berechnet den Score**. Der Client schickt niemals eine Zahl wie "ich habe 87 Punkte", sondern
-ausschließlich die rohen Feature-Frames (Peak/RMS/Centroid/Flatness/Clipped, 50 Hz) plus das
-Kalibrierungsprofil.
+berechnet die Wertung**. Der Client schickt niemals eine Zahl wie "ich habe 87 Punkte", sondern
+ausschließlich die rohen Feature-Frames (Peak/RMS/Centroid/Flatness/Clipped, 50 Hz), durchgehend
+für die gesamte Matchdauer gestreamt, plus das Kalibrierungsprofil einmal zu Sitzungsbeginn.
 
 ## Anti-Cheat – ehrlich begrenzt
 
 Es gibt keine Illusion von echter Cheat-Sicherheit in einem Browser-Audiospiel ohne Konten:
 
-- **`MIC_OVERLOAD`**: mehr als 10 aufeinanderfolgende übersteuerte Frames → Lautstärke auf
-  42 Punkte gedeckelt.
-- **`REPLAY_SUSPECT`**: die RMS-Hüllkurve korreliert (Pearson) über 0.97 mit einer früheren
-  Runde desselben Spielers → Score auf 60 gedeckelt.
+- **`MIC_OVERLOAD`**: mindestens 60% der Frames eines Ticks sind übersteuert → Intensität für
+  diesen Tick auf 55 Punkte gedeckelt.
 - **`CALIBRATION_MISMATCH`**: Peak liegt mehr als 9 dB über dem kalibrierten Maximum → Flag,
   Neukalibrierung wird nahegelegt.
 
-Alle drei sind **Flags, keine Bans**, und werden dem ganzen Raum als deutsches Label gezeigt.
+Beide sind **Flags, keine Bans**, und werden dem ganzen Raum als deutsches Label gezeigt.
+**`REPLAY_SUSPECT`** (Korrelation der RMS-Hüllkurve mit einer früheren Runde) gab es im
+rundenbasierten System, entfällt aber mit dem Wechsel auf durchgehendes Bellen – es gibt keine
+diskreten "Runden" mehr, mit denen man vergleichen könnte (siehe BLOCKERS.md).
 **Wer einen Lautsprecher ans Mikro hält, kann trotzdem cheaten.** Das lässt sich mit reiner
 Client-Audio-Analyse nicht verhindern – es wird hier nicht vorgegaukelt, dass es das könnte.
 
@@ -180,47 +195,52 @@ ein In-Memory-Ringpuffer (500 Einträge) ohne Persistenz über einen Server-Neus
   längsten Wartenden sofort gepaart – kein Countdown, keine Mindestspielerzahl über 2 hinaus.
   Wartet jemand länger als `botFallbackMs` (Default 6s) ohne menschlichen Gegner, wird
   automatisch mit einem Bot zufälliger Schwierigkeit gepaart (siehe "Bots" unten). Jede
-  Begegnung ist eine einzelne Mini-Begegnung (jeder bellt einmal); danach führt ein erneuter
-  Klick auf "Nächster Gegner" zu einer neuen Paarung. Nie echter Ton: der Gegner hört einen
-  client-seitig aus den Feature-Frames synthetisierten Bark-Sound (`packages/bark-synth`,
-  `lib/audio/bark-synth-voice.ts`), live gestreamt während des Bellfensters.
+  Begegnung ist ein einzelnes durchgehendes Tauzieh-Match (kein Knopf, kein Abwechseln);
+  danach führt ein erneuter Klick auf "Nächster Gegner" zu einer neuen Paarung. Nie echter Ton:
+  der Gegner hört einen client-seitig aus den Feature-Frames synthetisierten Bark-Sound
+  (`packages/bark-synth`, `lib/audio/bark-synth-voice.ts`), live gestreamt für die gesamte
+  Matchdauer.
 - **Private Lobby**: 6-stelliger Code (Großbuchstaben ohne `I`, `O`, `0`, `1`), Beitritt per
   Code oder Link `/j/ABCDEF`. Host konfiguriert Spielerzahl-Limit (2–8), Kick-Button, kann Bots
   in freie Slots einfügen (siehe "Bots" unten), Host-Übernahme wenn der Host geht.
-  Standardmäßig läuft **echter Ton** (komprimierte Aufnahme pro Bellfenster,
+  Standardmäßig läuft **echter Ton** (durchgehende komprimierte Aufnahme in kurzen Chunks,
   `MediaRecorder`/Opus, `lib/audio/recorder.ts`) – der Host kann das jederzeit auf den
   Bark-Synth umschalten. Modus:
-  - **Duell** (automatisch bei genau 2 Spielern): Tauzieh, abwechselnd, endet sofort bei ±100
-    auf der Seil-Skala.
-  - **Rudel** (Host wählt, ab 3 Spielern): alle nacheinander, das für 3 Zyklen, Ranking nach
-    Score-Summe.
+  - **Duell** (automatisch bei genau 2 Spielern): Tauzieh, beide bellen durchgehend
+    gleichzeitig, endet sofort bei ±100 auf der Seil-Skala.
+  - **Rudel** (Host wählt, ab 3 Spielern): alle bellen gleichzeitig und durchgehend über eine
+    feste Matchdauer, Ranking nach Gesamtpunktzahl.
   - **Kläffduell** (Host wählt, ab 3 Spielern): echtes K.-o.-Bracket
     (`packages/protocol/src/bracket.ts`, zufällige Paarung, Freilos bei ungerader Zahl), jedes
-    Matchup ein Tauzieh, Matchups laufen sequenziell (alle sehen zu).
+    Matchup ein durchgehendes Tauzieh, Matchups laufen sequenziell (alle sehen zu).
 - **Kein Freitext-Chat.** Nur ein Emote-Rad mit 8 festen Reaktionen, live über der Avatarkarte
   angezeigt.
 - **Nickname-Filter** (deutsch/englisch, Leetspeak-normalisiert) ersetzt gesperrte Namen durch
   einen generierten Fallback im Stil "Klaeffender Keks 42" – **nicht erschöpfend**, umgehbar
   durch neue Wortkombinationen oder andere Sprachen.
-- **Scoring läuft immer über Feature-Frames**, egal ob echter Ton läuft oder nicht: 150
-  Frames pro Bellfenster (live gestreamt, 50 Hz) plus ein Pegelwert 0–100 (gedrosselt auf
-  10 Hz) für die Live-Reaktion der Avatare. Echter Ton ist zusätzlich, nie ein Ersatz fürs
-  Scoring.
+- **Wertung läuft immer über Feature-Frames**, egal ob echter Ton läuft oder nicht: durchgehend
+  gestreamt für die gesamte Matchdauer (50 Hz) plus ein Pegelwert 0–100 (gedrosselt auf 10 Hz)
+  für die Live-Reaktion der Avatare. Echter Ton ist zusätzlich, nie ein Ersatz für die Wertung.
 
 ## Bots
 
-Kein simuliertes Mikrofon: der Server generiert eine plausible `AudioFrame`-Sequenz
-(`generateSyntheticBarkFrames` in `packages/scoring/src/bot.ts`) und schickt sie durch dieselbe,
-unveränderte `scoreBark`-Funktion wie ein echter Spieler – eine Quelle der Wahrheit für die
-Wertung, kein zweiter Pfad. Drei Schwierigkeitsstufen (Welpe/Kläffer/Alptraum-Dogge, empirisch
-kalibriert auf Score-Mittelwerte ~45/~65/~82 mit sinkender Streuung). Ein Bot ist immer als
-solcher erkennbar: eigene deutsche Namensliste ("Welpe Keks", "Kläffer Rudi", "Alptraum-Dogge
-Bruno", ...), ein kleinerer/konstanter Avatar-Seed-Bereich, und überall ein sichtbares
-`BotBadge` (Avatarkarte, Bühne, Ergebnis-Screen) – nie wie ein Mensch dargestellt. Zwei
-Einsatzorte: automatischer Kläffkarussell-Fallback nach `botFallbackMs` (Default 6s) ohne
-menschlichen Gegner, und "Bot hinzufügen" als Host-Aktion in der privaten Lobby (jederzeit
-entfernbar über das bestehende Kick). Ist ein Bot am Zug, bellt er nach einer kurzen,
-zufälligen Verzögerung von selbst – über denselben Rundenablauf wie ein echter `BARK_SUBMIT`.
+Kein simuliertes Mikrofon: der Server synthetisiert pro Bot einen kontinuierlichen Bark/Pause-
+Strom (`generateSyntheticBarkFrames` in `packages/scoring/src/bot.ts`, als wiederholter Zyklus
+mit fortlaufend neuem Seed aneinandergehängt, siehe `nextBotFrames` in `server/game-server.ts`)
+und lässt ihn durch dieselbe, unveränderte `computeLiveIntensity`-Funktion wie einen echten
+Spieler laufen – eine Quelle der Wahrheit für die Wertung, kein zweiter Pfad. Drei
+Schwierigkeitsstufen (Welpe/Kläffer/Alptraum-Dogge), deren relative Lautstärke-Zielbereiche
+(`peakDbfsRange` in `packages/scoring/src/bot.ts`) ursprünglich gegen die frühere, rundenbasierte
+`scoreBark`-Funktion kalibriert wurden – für die aktuelle, rein peak-basierte Live-Wertung ergibt
+sich die gewünschte Differenzierung (Welpe leiser/variabler, Alptraum-Dogge lauter/konstanter)
+weiterhin allein aus diesen Peak-Bereichen. Ein Bot ist immer als solcher erkennbar: eigene
+deutsche Namensliste ("Welpe Keks", "Kläffer Rudi", "Alptraum-Dogge Bruno", ...), ein
+kleinerer/konstanter Avatar-Seed-Bereich, und überall ein sichtbares `BotBadge` (Avatarkarte,
+Bühne, Ergebnis-Screen) – nie wie ein Mensch dargestellt. Zwei Einsatzorte: automatischer
+Kläffkarussell-Fallback nach `botFallbackMs` (Default 6s) ohne menschlichen Gegner, und "Bot
+hinzufügen" als Host-Aktion in der privaten Lobby (jederzeit entfernbar über das bestehende
+Kick). Ein Bot bellt ab Matchstart von selbst durchgehend, genau wie ein Mensch – kein
+Abwarten, bis er "an der Reihe" ist, das Konzept einer Reihenfolge gibt es nicht mehr.
 
 ## Barrierefreiheit – ehrlich
 
@@ -251,37 +271,40 @@ framegleich).
 
 ## Tests
 
-- **`packages/scoring`**: 14 Unit-Tests, inklusive des Fairness-Tests und Anti-Cheat-Flags, plus
-  15 Tests für den Bot-Frame-Generator (Toleranzband je Schwierigkeitsstufe über 200
-  Stichproben, keine NaN/Infinity/negativen Scores, Determinismus, Streuungs-Reihenfolge, nie
-  ein Anti-Cheat-Flag). Fixtures werden deterministisch synthetisiert (`scripts/gen-fixtures.ts`,
-  mulberry32-PRNG), kein echtes Mikrofon nötig.
+- **`packages/scoring`**: 14 Unit-Tests für `scoreBark` (Fairness-Test, Anti-Cheat-Flags),
+  15 Tests für den Bot-Frame-Generator, 11 Tests für die Live-Intensität (`computeLiveIntensity`:
+  Stille/Extremwerte, keine NaN/Infinity, immer 0–100, Determinismus, `MIC_OVERLOAD`-Deckelung,
+  `CALIBRATION_MISMATCH`-Flag, bewusst **keine** Anti-Heul-Abwertung). Fixtures werden
+  deterministisch synthetisiert (`scripts/gen-fixtures.ts`, mulberry32-PRNG), kein echtes
+  Mikrofon nötig.
 - **`packages/bark-synth`**: 17 Unit-Tests für die Mapping-Mathematik (Tonhöhe bleibt im
   200–900Hz-Zielbereich auch bei Extremwerten, Determinismus, keine NaN/Infinity bei Stille).
 - **`packages/protocol`**: Unit-Tests für Lobby-Reducer, Kläffkarussell-Warteschlange,
-  Match-/Rudel-Standings, Tauzieh-Kernmechanik (`tug-of-war.ts`: neutraler Start, Schwelle,
-  deterministischer Sudden-Death-Tiebreak, Determinismus), Kläffduell-Bracket (Pairing,
-  Freilose, K.-o.-Progression), Nickname-Filter, Report-Schwelle, Lobby-Codes, Zod-Schemas,
-  Bot-Spieler (Namenspräfix pro Stufe, Avatar-Seed erfüllt weiterhin `AvatarSeedSchema`,
-  Zusammenspiel mit `addPlayer`/`kickPlayer`) – alles ohne Netzwerk.
+  Live-Match-Kernmechanik (`live-match.ts`: neutraler Start, Tick-Akkumulation, Seil-Schwelle,
+  deterministischer Sudden-Death-Tiebreak – auch bei exaktem Patt nie zufällig, Rudel-Rangliste
+  nach fester Matchdauer), Kläffduell-Bracket (Pairing, Freilose, K.-o.-Progression),
+  Nickname-Filter, Report-Schwelle, Lobby-Codes, Zod-Schemas, Bot-Spieler (Namenspräfix pro
+  Stufe, Avatar-Seed erfüllt weiterhin `AvatarSeedSchema`, Zusammenspiel mit
+  `addPlayer`/`kickPlayer`) – alles ohne Netzwerk.
 - **`server`**: 21 Integrationstests mit echten `ws`-Clients gegen einen echten
   `http`+`WebSocketServer` (Kläffkarussell-Pairing bei 2/4/6 Wartenden, Re-Pairing, aktives
-  Verlassen, Live-Frame-Relay, Melde-Schwelle, Bot-Fallback nach Timeout; private Lobby:
-  Duell/Rudel/Kläffduell komplett durchgespielt – Duell/Kläffkarussell/Kläffduell-Matchups über
-  deterministisch stark unterschiedliche Scores bis zur Tauzieh-Schwelle gespielt statt über
-  feste Rundenzahlen –, Bot per "Bot hinzufügen" komplett durchgespielt und wieder entfernt,
-  Echter-Ton-Relay inkl. Abschalten, Host-Übernahme, Disconnect/Reconnect, doppelter Join
-  derselben UUID, Rundentimeout, Nickname-Filter).
+  Verlassen, Live-Frame-Relay, Melde-Schwelle, Bot-Fallback nach Timeout mit kontinuierlich
+  bellendem Bot; private Lobby: Duell/Rudel/Kläffduell komplett durchgespielt – alle Modi über
+  durchgehend gestreamte `BARK_FRAME`s mit deterministisch stark unterschiedlicher Lautstärke
+  bis zur Tauzieh-Schwelle bzw. bis zum Ablauf der Rudel-Matchdauer gespielt, kein fester
+  Rundenzähler –, Sudden-Death entscheidet nie zufällig bei exaktem Patt, Bot per "Bot
+  hinzufügen" komplett durchgespielt und wieder entfernt, Echter-Ton-Chunk-Relay inkl.
+  Abschalten, Host-Übernahme, Disconnect mitten im Match + Reconnect mit Weiterbellen,
+  doppelter Join derselben UUID, Nickname-Filter).
 - **`e2e`**: Playwright mit `--use-fake-device-for-media-stream` und einer echten (synthetisch
-  erzeugten) WAV-Datei als Mikro-Input – kompletter Kläffkarussell-Durchlauf inkl. Re-Pairing,
-  privates Tauzieh-Duell mit echtem Ton, allein gegen einen Bot spielen (`solo-vs-bot.spec.ts`),
-  iPad-Screenshots in beiden Ausrichtungen, ein Performance-Rauchtest. Beide Tauzieh-Matches mit
-  zwei Menschen laufen dynamisch bis SIEG!/NIEDERLAGE (`playTugOfWarUntilResult` in
-  `e2e/helpers.ts`) statt über eine feste Rundenzahl – alle E2E-Kontexte teilen dieselbe
-  Fake-Audio-Datei, das Match wird also über den deterministischen Sudden-Death-Fallback
-  entschieden; der Solo-Bot-Test nutzt dafür `playSoloAgainstBot` (wartet, wenn der Bot dran
-  ist, statt eine feste Rundenzahl anzunehmen). Rudel/Kläffduell bewusst nur auf Protokoll-/
-  Server-Ebene getestet, nicht per Browser-E2E (siehe BLOCKERS.md).
+  erzeugten) WAV-Datei als durchgehender Mikro-Input – kompletter Kläffkarussell-Durchlauf inkl.
+  Re-Pairing, privates Tauzieh-Duell mit echtem Ton, allein gegen einen Bot spielen
+  (`solo-vs-bot.spec.ts`), iPad-Screenshots in beiden Ausrichtungen, ein Performance-Rauchtest.
+  Kein Knopf mehr zu klicken – `waitForMatchResult` (`e2e/helpers.ts`) wartet nur noch, bis
+  SIEG!/NIEDERLAGE erscheint, während die Fake-Audio-Datei ohnehin die ganze Zeit Pegel liefert;
+  alle E2E-Kontexte teilen dieselbe Datei, ein 1v1 zwischen zwei echten Browsern wird also
+  praktisch immer über den deterministischen Sudden-Death-Fallback entschieden. Rudel/Kläffduell
+  bewusst nur auf Protokoll-/Server-Ebene getestet, nicht per Browser-E2E (siehe BLOCKERS.md).
 
 `npm run verify` fasst Lint+Typecheck+Test zusammen und läuft vor jedem Commit.
 
@@ -318,8 +341,8 @@ Da KLÄFF ausschließlich technisch notwendige Cookies/`localStorage` verwendet 
 keine Werbung, keine Analyse-Tools), ist nach § 25 Abs. 2 Nr. 2 TDDDG kein
 Einwilligungs-Consent-Banner mit Ablehnen-Option nötig. `components/CookieNotice.tsx` zeigt
 trotzdem einen einmaligen Transparenz-Hinweis – bewusst nur auf dem Start- und dem
-Gate-Screen, **nicht** global über alle Screens gerendert, weil ein fixes Banner sonst den
-zeitkritischen BELL!-Button während eines Matches verdecken kann (siehe BLOCKERS.md).
+Gate-Screen, **nicht** global über alle Screens gerendert, weil ein fixes Banner sonst die
+Tauzieh-Skala/Avatare während eines laufenden Matches verdecken kann (siehe BLOCKERS.md).
 
 Diese Texte sind sorgfältig an den tatsächlichen Code angelehnt, aber **keine Rechtsberatung** –
 der Besitzer wollte sie selbst noch mal durchsehen, siehe Auftrag.
@@ -332,8 +355,10 @@ der Besitzer wollte sie selbst noch mal durchsehen, siehe Auftrag.
 - Der Performance-Test misst auf einem geteilten CI-Runner, nicht auf echter Mobil-Hardware –
   er ist ein Regressions-Rauchtest, kein belastbarer 60fps-Beweis für ein echtes iPad.
 - Reconnect stellt die Verbindung wieder her, synchronisiert aber nicht rückwirkend alle
-  während der Trennung verpassten Broadcasts (z.B. zwischenzeitliche Rundenergebnisse) –
-  der Spieler sieht ab dem nächsten Broadcast wieder den korrekten Live-Zustand.
+  während der Trennung verpassten `LIVE_MATCH_UPDATE`-Ticks – der Spieler sieht ab dem
+  nächsten Tick wieder den korrekten Live-Zustand (Seilposition/Rangliste).
+- Die AGC-Fairness-Kompensation (Attack/Crest-Gewichtung im AGC-Modus) gibt es seit dem Wechsel
+  auf die rein peak-basierte Live-Intensität nicht mehr – siehe "Fairness" oben und BLOCKERS.md.
 - Kein Live-Deploy in dieser Session (kein `RENDER_API_KEY` in der Build-Umgebung) – siehe
   [DEPLOY.md](./DEPLOY.md) für den manuellen letzten Schritt.
 
