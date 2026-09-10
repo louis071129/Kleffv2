@@ -6,6 +6,7 @@ import type { AudioFrame } from "@klaeff/scoring";
 import { computeEnvelopeParams } from "@klaeff/bark-synth";
 import { computeTugOfWarState, TUG_OF_WAR_THRESHOLD, type Match } from "@klaeff/protocol";
 import { Avatar } from "../Avatar";
+import { BotBadge } from "../BotBadge";
 import { Button } from "../Button";
 import { Card } from "../Card";
 import { ScoreReveal } from "../ScoreReveal";
@@ -186,7 +187,7 @@ export function MatchScreen(): React.ReactElement {
             fraction={myTugFraction}
             meNickname={me.nickname}
             meAvatar={me.avatar}
-            opponentNickname={tugOpponent.nickname}
+            opponentNickname={tugOpponent.botDifficulty ? `🤖 ${tugOpponent.nickname}` : tugOpponent.nickname}
             opponentAvatar={tugOpponent.avatar}
           />
         )
@@ -225,6 +226,7 @@ export function MatchScreen(): React.ReactElement {
             <EmoteBubble playerId={barker.id} />
             <Avatar seed={barker.avatar} size={200} mouthOpen={barkerLevel / 100} />
             <p className="font-display text-2xl">{barker.nickname}</p>
+            {barker.botDifficulty && <BotBadge difficulty={barker.botDifficulty} />}
             {isMyTurn && <span className="text-xs text-[var(--lime)]">Du bist dran!</span>}
           </motion.div>
         )}
@@ -235,6 +237,7 @@ export function MatchScreen(): React.ReactElement {
               <EmoteBubble playerId={p.id} />
               <Avatar seed={p.avatar} size={56} mouthOpen={(levels[p.id] ?? 0) / 100} />
               <p className="max-w-[4rem] truncate text-[10px]">{p.nickname}</p>
+              {p.botDifficulty && <BotBadge difficulty={p.botDifficulty} className="text-[7px]" />}
             </div>
           ))}
         </div>

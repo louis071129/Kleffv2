@@ -1,6 +1,8 @@
 "use client";
 
+import type { BotDifficulty } from "@klaeff/protocol";
 import { Avatar } from "../Avatar";
+import { BotBadge } from "../BotBadge";
 import { Button } from "../Button";
 import { Card } from "../Card";
 import { ConnectionDot } from "../ConnectionDot";
@@ -8,6 +10,12 @@ import { EmoteBubble } from "../EmoteBubble";
 import { EmoteWheel } from "../EmoteWheel";
 import { useGameStore } from "../../lib/store/game-store";
 import { getKlaeffClient } from "../../lib/ws-client";
+
+const BOT_DIFFICULTY_OPTIONS: { readonly value: BotDifficulty; readonly label: string }[] = [
+  { value: "welpe", label: "🐾 Welpe" },
+  { value: "klaeffer", label: "🐕 Kläffer" },
+  { value: "alptraum-dogge", label: "👹 Alptraum-Dogge" },
+];
 
 export function LobbyScreen({ onLeave }: { readonly onLeave: () => void }): React.ReactElement {
   const lobby = useGameStore((s) => s.lobby);
@@ -66,6 +74,7 @@ export function LobbyScreen({ onLeave }: { readonly onLeave: () => void }): Reac
               />
             </div>
             <p className="max-w-[6rem] truncate text-sm font-semibold">{player.nickname}</p>
+            {player.botDifficulty && <BotBadge difficulty={player.botDifficulty} />}
             {player.isHost && <span className="text-[10px] uppercase text-[var(--violet)]">Host</span>}
             {player.id !== playerId && (
               <div className="flex gap-2">
@@ -75,16 +84,18 @@ export function LobbyScreen({ onLeave }: { readonly onLeave: () => void }): Reac
                     className="text-[10px] text-[var(--pink)] underline"
                     onClick={() => getKlaeffClient().send({ type: "LOBBY_KICK", targetPlayerId: player.id })}
                   >
-                    Kicken
+                    {player.botDifficulty ? "Entfernen" : "Kicken"}
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="text-[10px] text-[var(--muted)] underline"
-                  onClick={() => getKlaeffClient().send({ type: "REPORT_PLAYER", targetPlayerId: player.id })}
-                >
-                  Melden
-                </button>
+                {!player.botDifficulty && (
+                  <button
+                    type="button"
+                    className="text-[10px] text-[var(--muted)] underline"
+                    onClick={() => getKlaeffClient().send({ type: "REPORT_PLAYER", targetPlayerId: player.id })}
+                  >
+                    Melden
+                  </button>
+                )}
               </div>
             )}
           </Card>
@@ -162,6 +173,24 @@ export function LobbyScreen({ onLeave }: { readonly onLeave: () => void }): Reac
                 >
                   Rudel (Ranking)
                 </button>
+              </div>
+            </div>
+          )}
+
+          {lobby.players.length < lobby.maxPlayers && (
+            <div className="flex flex-col gap-1">
+              <span className="text-sm">Bot hinzufügen</span>
+              <div className="flex gap-2">
+                {BOT_DIFFICULTY_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className="klaeff-btn klaeff-btn--secondary flex-1 min-h-[36px] px-2 py-1 text-[11px]"
+                    onClick={() => getKlaeffClient().send({ type: "LOBBY_ADD_BOT", difficulty: option.value })}
+                  >
+                    {option.label}
+                  </button>
+                ))}
               </div>
             </div>
           )}

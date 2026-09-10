@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { Avatar } from "../Avatar";
+import { BotBadge } from "../BotBadge";
 import { Button } from "../Button";
 import { Card } from "../Card";
 import { useGameStore } from "../../lib/store/game-store";
@@ -72,6 +73,7 @@ export function ResultScreen({ onPlayAgain, onLeave }: ResultScreenProps): React
                 {winner.nickname}
                 {winner.id === playerId ? " (Du)" : ""}
               </p>
+              {winner.botDifficulty && <BotBadge difficulty={winner.botDifficulty} />}
               <span className="rounded-full border-2 border-[var(--ink)] bg-[var(--lime)] px-2 py-0.5 text-[10px] font-bold">
                 🏆 GEWINNER
               </span>
@@ -89,6 +91,7 @@ export function ResultScreen({ onPlayAgain, onLeave }: ResultScreenProps): React
                 {loser.nickname}
                 {loser.id === playerId ? " (Du)" : ""}
               </p>
+              {loser.botDifficulty && <BotBadge difficulty={loser.botDifficulty} />}
             </motion.div>
           )}
         </div>
@@ -126,6 +129,7 @@ export function ResultScreen({ onPlayAgain, onLeave }: ResultScreenProps): React
             >
               {player && <Avatar seed={player.avatar} size={rank === 1 ? 80 : 60} />}
               <p className="max-w-[5rem] truncate text-center text-xs font-semibold">{player?.nickname}</p>
+              {player?.botDifficulty && <BotBadge difficulty={player.botDifficulty} className="text-[7px]" />}
               <p className="font-display text-lg">{entry.score ? Math.round(entry.score.total) : "-"}</p>
               <div
                 className="flex w-16 items-start justify-center rounded-t-lg border-3 border-[var(--ink)] bg-[var(--paper)] pt-2 text-[var(--ink)]"
@@ -144,10 +148,11 @@ export function ResultScreen({ onPlayAgain, onLeave }: ResultScreenProps): React
             {rest.map((entry) => {
               const player = players.find((p) => p.id === entry.playerId);
               return (
-                <li key={entry.playerId} className="flex justify-between">
-                  <span>
+                <li key={entry.playerId} className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1">
                     {entry.rank}. {player?.nickname}
                     {entry.playerId === playerId ? " (du)" : ""}
+                    {player?.botDifficulty && <BotBadge difficulty={player.botDifficulty} className="text-[7px]" />}
                   </span>
                   <span>{entry.score ? Math.round(entry.score.total) : "-"}</span>
                 </li>
