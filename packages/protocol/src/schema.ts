@@ -56,6 +56,9 @@ export const StandingSchema = z.object({
   aggregateTotal: z.number().nullable(),
 });
 
+/** Die drei Bot-Schwierigkeitsstufen, siehe packages/scoring/src/bot.ts. */
+export const BotDifficultySchema = z.enum(["welpe", "klaeffer", "alptraum-dogge"]);
+
 export const EmoteSchema = z.enum([
   "WAU",
   "KNURR",
@@ -74,6 +77,8 @@ export const PlayerSchema = z.object({
   connected: z.boolean(),
   isHost: z.boolean(),
   joinedAt: z.number(),
+  /** Nur bei Bot-Spielern gesetzt, sonst null - fuer das BOT-Abzeichen im UI. */
+  botDifficulty: BotDifficultySchema.nullable().optional(),
 });
 
 export const PrivateMatchModeSchema = z.enum(["duell", "bracket", "rudel"]);
@@ -118,6 +123,9 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LOBBY_JOIN"), code: z.string().length(6) }),
   z.object({ type: z.literal("LOBBY_LEAVE") }),
   z.object({ type: z.literal("LOBBY_KICK"), targetPlayerId: z.string() }),
+  // Host fuegt einen Bot in einen freien Slot ein (nur private Lobby,
+  // waehrend "waiting") - Entfernen laeuft ueber das bestehende LOBBY_KICK.
+  z.object({ type: z.literal("LOBBY_ADD_BOT"), difficulty: BotDifficultySchema }),
   z.object({ type: z.literal("LOBBY_SET_MAX_PLAYERS"), maxPlayers: z.number().int().min(2).max(8) }),
   z.object({ type: z.literal("LOBBY_SET_MATCH_MODE"), matchMode: PrivateMatchModeSchema }),
   z.object({ type: z.literal("LOBBY_SET_AUDIO_MODE"), audioMode: AudioModeSchema }),

@@ -1,4 +1,4 @@
-import type { AntiCheatFlag, BarkScore, CalibrationProfile } from "@klaeff/scoring";
+import type { AntiCheatFlag, BarkScore, BotDifficulty, CalibrationProfile } from "@klaeff/scoring";
 
 export type PlayerId = string;
 export type LobbyId = string;
@@ -35,6 +35,8 @@ export interface Player {
   readonly connected: boolean;
   readonly isHost: boolean;
   readonly joinedAt: number;
+  /** Nur bei Bot-Spielern gesetzt (sonst undefined) - siehe protocol/src/bot.ts. Nie true fuer echte Spieler. */
+  readonly botDifficulty?: BotDifficulty;
 }
 
 export interface Lobby {
