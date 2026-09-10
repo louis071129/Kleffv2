@@ -59,62 +59,22 @@ export async function joinPrivateLobby(page: Page, code: string): Promise<void> 
 }
 
 /**
- * Spielt ein Tauzieh-Match (Kläffkarussell/Duell/Kläffduell-Matchup) durch,
- * bis auf einer der Seiten SIEG!/NIEDERLAGE erscheint - die Rundenzahl ist
- * dynamisch (Seil-Schwelle statt fester Zyklenzahl, siehe
- * packages/protocol/src/tug-of-war.ts), daher kein fester Loop mehr. Alle
- * E2E-Kontexte teilen sich dieselbe Fake-Audio-Datei (siehe
- * playwright.config.ts), Scores sind also praktisch identisch - das Match
- * wird ueber den deterministischen Sudden-Death-Fallback (nie zufaellig)
- * entschieden, das braucht bis zu 15 Runden.
+ * Wartet, bis das laufende Live-Match beendet ist (SIEG!/NIEDERLAGE
+ * erscheint) - kein Knopf mehr zu klicken, alle Beteiligten (Menschen wie
+ * Bots) bellen ab Matchstart automatisch durchgehend (Menschen ueber die per
+ * --use-file-for-fake-audio-capture eingespeiste Fake-Audio-Datei, siehe
+ * playwright.config.ts). Alle E2E-Kontexte teilen sich dieselbe Datei, ein
+ * 1v1 zwischen zwei echten Browsern wird also praktisch immer erst ueber den
+ * deterministischen Sudden-Death-Fallback (nie zufaellig, siehe
+ * TUG_OF_WAR_SUDDEN_DEATH_MS) entschieden - daher der grosszuegige Timeout.
  */
-export async function playTugOfWarUntilResult(pages: readonly Page[], maxRounds = 20): Promise<void> {
-  for (let round = 0; round < maxRounds; round += 1) {
-    const resultVisible = await pages[0]!
-      .getByText(/SIEG!|NIEDERLAGE/u)
-      .first()
-      .isVisible()
-      .catch(() => false);
-    if (resultVisible) return;
-
-    for (const page of pages) {
-      const bellButton = page.getByRole("button", { name: /BELL!/u });
-      if (await bellButton.isVisible().catch(() => false)) {
-        await bellButton.click();
-        // Bellfenster dauert 3s, danach kommt das Rundenergebnis.
-        await page.waitForTimeout(3500);
-        break;
-      }
-    }
-  }
-  throw new Error("Tauzieh-Match nicht innerhalb der Sicherheitsgrenze entschieden (E2E)");
-}
-
-/**
- * Spielt ein Match gegen einen Bot durch, bis SIEG!/NIEDERLAGE erscheint -
- * nur EIN echter Browser-Context noetig (der Bot hat keine eigene Page,
- * bellt serverseitig von selbst). Ist der Bot an der Reihe, wird nur kurz
- * gewartet (Bot-Bellverzoegerung ist bis zu 2s, siehe GameServerOptions.
- * botBarkDelayMs) statt eine feste Rundenzahl anzunehmen.
- */
-export async function playSoloAgainstBot(page: Page, maxRounds = 40): Promise<void> {
-  for (let round = 0; round < maxRounds; round += 1) {
-    const resultVisible = await page
-      .getByText(/SIEG!|NIEDERLAGE/u)
-      .first()
-      .isVisible()
-      .catch(() => false);
-    if (resultVisible) return;
-
-    const bellButton = page.getByRole("button", { name: /BELL!/u });
-    if (await bellButton.isVisible().catch(() => false)) {
-      await bellButton.click();
-      // Bellfenster dauert 3s, danach kommt das Rundenergebnis.
-      await page.waitForTimeout(3500);
-    } else {
-      // Der Bot ist dran - er bellt serverseitig von selbst, nur kurz pollen.
-      await page.waitForTimeout(400);
-    }
-  }
-  throw new Error("Match gegen Bot nicht innerhalb der Sicherheitsgrenze entschieden (E2E)");
+export async function waitForMatchResult(pages: readonly Page[], timeoutMs = 40_000): Promise<void> {
+  await Promise.all(
+    pages.map((page) =>
+      page
+        .getByText(/SIEG!|NIEDERLAGE/u)
+        .first()
+        .waitFor({ state: "visible", timeout: timeoutMs }),
+    ),
+  );
 }

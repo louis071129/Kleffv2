@@ -23,17 +23,22 @@ export function ResultScreen({ onPlayAgain, onLeave }: ResultScreenProps): React
   const lobby = useGameStore((s) => s.lobby);
   const standings = useGameStore((s) => s.matchStandings);
   const playerId = useGameStore((s) => s.playerId);
-  const matchStyle = useGameStore((s) => s.matchStyle);
   const announced = useRef(false);
   const isCarousel = lobby?.mode === "carousel";
+  // Kläffduell-Gesamtplatzierung (K.-o.-Ausscheidung) hat keinen echten
+  // cumulativeScore je Spieler (nur die Ausscheidungsrunde zaehlt, siehe
+  // finishBracket in server/game-server.ts) - dort "-" statt einer
+  // irrefuehrenden 0 anzeigen.
+  const isBracketFinal = lobby?.matchMode === "bracket";
 
   const players = lobby?.players ?? [];
   const podium = (standings ?? []).filter((s) => s.rank <= 3);
   const rest = (standings ?? []).filter((s) => s.rank > 3);
   const won = podium.find((s) => s.rank === 1)?.playerId === playerId;
-  // Tauzieh (2 Spieler): eindeutiger Sieg/Niederlage-Moment statt Podium -
-  // der Auftrag verlangt explizit, dass der Gewinnmoment sofort klar ist.
-  const isTugOfWarResult = matchStyle === "tugofwar" && (standings?.length ?? 0) === 2;
+  // Tauzieh (2 Spieler, egal ob Kläffkarussell/Duell oder ein 2-Spieler-
+  // Kläffduell): eindeutiger Sieg/Niederlage-Moment statt Podium - der
+  // Auftrag verlangt explizit, dass der Gewinnmoment sofort klar ist.
+  const isTugOfWarResult = (standings?.length ?? 0) === 2;
 
   useEffect(() => {
     if (!announced.current && standings) {
@@ -130,7 +135,7 @@ export function ResultScreen({ onPlayAgain, onLeave }: ResultScreenProps): React
               {player && <Avatar seed={player.avatar} size={rank === 1 ? 80 : 60} />}
               <p className="max-w-[5rem] truncate text-center text-xs font-semibold">{player?.nickname}</p>
               {player?.botDifficulty && <BotBadge difficulty={player.botDifficulty} className="text-[7px]" />}
-              <p className="font-display text-lg">{entry.score ? Math.round(entry.score.total) : "-"}</p>
+              <p className="font-display text-lg">{isBracketFinal ? "-" : Math.round(entry.cumulativeScore)}</p>
               <div
                 className="flex w-16 items-start justify-center rounded-t-lg border-3 border-[var(--ink)] bg-[var(--paper)] pt-2 text-[var(--ink)]"
                 style={{ height: PODIUM_HEIGHT[rank] }}
@@ -154,7 +159,7 @@ export function ResultScreen({ onPlayAgain, onLeave }: ResultScreenProps): React
                     {entry.playerId === playerId ? " (du)" : ""}
                     {player?.botDifficulty && <BotBadge difficulty={player.botDifficulty} className="text-[7px]" />}
                   </span>
-                  <span>{entry.score ? Math.round(entry.score.total) : "-"}</span>
+                  <span>{isBracketFinal ? "-" : Math.round(entry.cumulativeScore)}</span>
                 </li>
               );
             })}

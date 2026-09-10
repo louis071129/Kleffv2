@@ -4,6 +4,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { GameServer } from "./game-server.js";
 import type { AvatarSeed, ClientMessage, ServerMessage } from "@klaeff/protocol";
+import type { AudioFrame } from "@klaeff/scoring";
 
 const TEST_AVATAR: AvatarSeed = {
   headShape: 0,
@@ -18,15 +19,9 @@ const TEST_AVATAR: AvatarSeed = {
   idleSeed: 1,
 };
 
-function makeFrames(
-  peakDbfs: number,
-  count = 20,
-): { t: number; peakDbfs: number; rmsDbfs: number; centroidHz: number; flatness: number; clipped: boolean }[] {
-  const frames = [];
-  for (let i = 0; i < count; i += 1) {
-    frames.push({ t: i * 20, peakDbfs, rmsDbfs: peakDbfs - 8, centroidHz: 1400, flatness: 0.3, clipped: false });
-  }
-  return frames;
+/** Ein einzelnes AudioFrame mit gegebenem Peak - Crest von 8dB haelt rmsDbfs konsistent unter/ueber der Aktiv-Schwelle, siehe computeLiveIntensity. */
+function makeFrame(peakDbfs: number): AudioFrame {
+  return { t: 0, peakDbfs, rmsDbfs: peakDbfs - 8, centroidHz: 1400, flatness: 0.3, clipped: false };
 }
 
 /**
@@ -77,38 +72,25 @@ class TestClient {
       return Promise.resolve(msg as Extract<ServerMessage, { type: T }>);
     }
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`Timeout beim Warten auf ${type}`)), timeoutMs);
-      this.waiters.push({
+      // Der Waiter muss sich bei Timeout selbst wieder austragen - sonst
+      // faengt er faelschlich eine SPAETERE echte Nachricht desselben Typs ab
+      // (auf ein bereits verworfenes Promise, das dann fuer immer haengt),
+      // statt dass sie den naechsten, noch wartenden waitFor()-Aufruf erreicht.
+      const waiter = {
         predicate,
-        resolve: (m) => {
+        resolve: (m: ServerMessage) => {
           clearTimeout(timer);
           resolve(m as Extract<ServerMessage, { type: T }>);
         },
-      });
-    });
-  }
-
-  /** Wie waitFor, aber fuer zwei moegliche Nachrichtentypen - registriert genau EINEN Waiter statt zwei. */
-  waitForEither<T1 extends ServerMessage["type"], T2 extends ServerMessage["type"]>(
-    type1: T1,
-    type2: T2,
-    timeoutMs = 3000,
-  ): Promise<Extract<ServerMessage, { type: T1 | T2 }>> {
-    const predicate = (m: ServerMessage): m is Extract<ServerMessage, { type: T1 | T2 }> => m.type === type1 || m.type === type2;
-    const index = this.received.findIndex(predicate);
-    if (index >= 0) {
-      const [msg] = this.received.splice(index, 1);
-      return Promise.resolve(msg as Extract<ServerMessage, { type: T1 | T2 }>);
-    }
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`Timeout beim Warten auf ${type1}/${type2}`)), timeoutMs);
-      this.waiters.push({
-        predicate,
-        resolve: (m) => {
-          clearTimeout(timer);
-          resolve(m as Extract<ServerMessage, { type: T1 | T2 }>);
-        },
-      });
+      };
+      const timer = setTimeout(() => {
+        const idx = this.waiters.indexOf(waiter);
+        if (idx >= 0) {
+          this.waiters.splice(idx, 1);
+        }
+        reject(new Error(`Timeout beim Warten auf ${type}`));
+      }, timeoutMs);
+      this.waiters.push(waiter);
     });
   }
 
@@ -129,10 +111,11 @@ async function createHarness(overrides: ConstructorParameters<typeof GameServer>
   const httpServer = createServer();
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
   const gameServer = new GameServer({
-    roundTimeoutMs: 400,
+    liveTickIntervalMs: 20,
     tickIntervalMs: 30,
     disconnectGraceMs: 300,
     heartbeatIntervalMs: 60_000,
+    rudelDurationMs: 250,
     ...overrides,
   });
   gameServer.attach(wss);
@@ -177,74 +160,20 @@ afterEach(async () => {
   }
 });
 
-async function playFullMatch(
-  players: { client: TestClient; playerId: string }[],
-  totalRounds: number,
-): Promise<void> {
-  for (let round = 0; round < totalRounds; round += 1) {
-    const roundStarted = await players[0]!.client.waitFor("ROUND_STARTED", 3000);
-    const barker = players.find((p) => p.playerId === roundStarted.barkerPlayerId);
-    expect(barker).toBeDefined();
-    barker!.client.send({ type: "BARK_SUBMIT", frames: makeFrames(-5) });
-    await players[0]!.client.waitFor("ROUND_RESULT", 3000);
-  }
-}
-
 /**
- * Spielt ein Tauzieh-Match (Kläffkarussell/Duell/Kläffduell-Matchup) bis zum
- * MATCH_RESULT durch - die Rundenzahl ist dynamisch (Seil-Schwelle statt
- * fester Zyklenzahl), daher wird hier ueber ROUND_STARTED/MATCH_RESULT
- * geloopt statt eine feste Anzahl Runden anzunehmen. `peakForPlayer` steuert
- * pro Spieler deterministisch, wie laut gebellt wird - mit klar
- * unterschiedlichen Werten (siehe Score-Formel in packages/scoring) loest
- * sich die Seil-Schwelle in wenigen Runden auf statt in ein 0:0 oder den
- * Sudden-Death-Fallback zu laufen.
+ * Simuliert durchgehendes Bellen (kein Knopf, kein Abwechseln mehr - siehe
+ * Auftrag): streamt BARK_FRAME in einem Intervall, das kuerzer ist als
+ * liveTickIntervalMs, damit garantiert bei jedem Server-Tick mindestens ein
+ * Frame im Puffer liegt. `stop()` beendet den Strom wieder.
  */
-async function playTugOfWarMatch(
-  listener: TestClient,
-  players: { client: TestClient; playerId: string }[],
-  peakForPlayer: (playerId: string) => number,
-  maxRounds = 30,
-): Promise<Extract<ServerMessage, { type: "MATCH_RESULT" }>> {
-  for (let i = 0; i < maxRounds; i += 1) {
-    const next = await listener.waitForEither("ROUND_STARTED", "MATCH_RESULT", 3000);
-    if (next.type === "MATCH_RESULT") {
-      return next;
-    }
-    const barker = players.find((p) => p.playerId === next.barkerPlayerId);
-    expect(barker).toBeDefined();
-    barker!.client.send({ type: "BARK_SUBMIT", frames: makeFrames(peakForPlayer(next.barkerPlayerId)) });
-    await listener.waitFor("ROUND_RESULT", 3000);
-  }
-  throw new Error("Tauzieh-Match nicht innerhalb der Sicherheitsgrenze entschieden");
-}
-
-/**
- * Spielt ein Match gegen einen Bot bis zum MATCH_RESULT durch: der Bot
- * bellt von selbst (server-seitiger Timer, siehe GameServer.maybeScheduleBotBark),
- * der Mensch bellt nur, wenn ER an der Reihe ist.
- */
-async function playAgainstBot(
-  listener: TestClient,
-  human: { client: TestClient; playerId: string },
-  maxRounds = 40,
-): Promise<Extract<ServerMessage, { type: "MATCH_RESULT" }>> {
-  for (let i = 0; i < maxRounds; i += 1) {
-    const next = await listener.waitForEither("ROUND_STARTED", "MATCH_RESULT", 5000);
-    if (next.type === "MATCH_RESULT") {
-      return next;
-    }
-    if (next.barkerPlayerId === human.playerId) {
-      human.client.send({ type: "BARK_SUBMIT", frames: makeFrames(-5) });
-      await listener.waitFor("ROUND_RESULT", 5000);
-    }
-    // Sonst ist der Bot dran - der bellt serverseitig von selbst, nur warten.
-  }
-  throw new Error("Match gegen Bot nicht innerhalb der Sicherheitsgrenze entschieden");
+function startBarking(client: TestClient, peakDbfs: number, intervalMs = 8): () => void {
+  const frame = makeFrame(peakDbfs);
+  const timer = setInterval(() => client.send({ type: "BARK_FRAME", frame }), intervalMs);
+  return () => clearInterval(timer);
 }
 
 describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", () => {
-  it("zwei wartende Spieler werden sofort gepaart und spielen eine komplette Begegnung (nie Rohaudio)", async () => {
+  it("zwei wartende Spieler werden sofort gepaart; wer lauter+laenger bellt gewinnt (kein Knopf, keine Runden)", async () => {
     const harness = await createHarness();
     currentHarness = harness;
 
@@ -262,12 +191,19 @@ describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", 
 
     const started = await a.client.waitFor("MATCH_STARTED", 2000);
     expect(started.style).toBe("tugofwar");
+    expect(started.participantIds.sort()).toEqual([a.playerId, b.playerId].sort());
 
-    // A bellt laut, B leise -> Seil zieht deterministisch zu A, kein Zufall.
-    const result = await playTugOfWarMatch(a.client, [a, b], (playerId) => (playerId === a.playerId ? -5 : -45));
+    // A bellt laut und durchgehend, B (fast) still -> Seil zieht deterministisch zu A, kein Zufall.
+    const stopA = startBarking(a.client, -5);
+    const stopB = startBarking(b.client, -45);
+    const result = await a.client.waitFor("MATCH_RESULT", 5000);
+    stopA();
+    stopB();
+
     expect(result.standings).toHaveLength(2);
     expect(result.standings[0]?.rank).toBe(1);
     expect(result.standings[0]?.playerId).toBe(a.playerId);
+    expect(result.standings[0]?.cumulativeScore).toBeGreaterThan(result.standings[1]?.cumulativeScore ?? 0);
   }, 15000);
 
   it("bei 4 gleichzeitig wartenden Spielern entstehen zwei Paare", async () => {
@@ -319,7 +255,12 @@ describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", 
     a.client.send({ type: "CAROUSEL_JOIN" });
     b.client.send({ type: "CAROUSEL_JOIN" });
     const firstLobby = await a.client.waitFor("LOBBY_STATE", 2000);
-    await playTugOfWarMatch(a.client, [a, b], (playerId) => (playerId === a.playerId ? -5 : -45));
+    await a.client.waitFor("MATCH_STARTED", 2000);
+    const stopA = startBarking(a.client, -5);
+    const stopB = startBarking(b.client, -45);
+    await a.client.waitFor("MATCH_RESULT", 5000);
+    stopA();
+    stopB();
     await b.client.waitFor("MATCH_RESULT", 2000);
 
     // A sucht sich einen neuen Gegner, C wartet bereits.
@@ -348,7 +289,7 @@ describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", 
     await expect(b.client.waitFor("LOBBY_STATE", 500)).rejects.toThrow();
   }, 10000);
 
-  it("Feature-Frames werden waehrend des Bellfensters live an den Gegner relayed (Grundlage fuer den Bark-Synth)", async () => {
+  it("Feature-Frames werden waehrend des gesamten Matches live an den Gegner relayed (Grundlage fuer den Bark-Synth)", async () => {
     const harness = await createHarness();
     currentHarness = harness;
 
@@ -356,14 +297,12 @@ describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", 
     const b = await harness.connect("device-f2", "B");
     a.client.send({ type: "CAROUSEL_JOIN" });
     b.client.send({ type: "CAROUSEL_JOIN" });
-    const roundStarted = await a.client.waitFor("ROUND_STARTED", 2000);
-    const barker = roundStarted.barkerPlayerId === a.playerId ? a : b;
-    const listener = barker === a ? b : a;
+    await a.client.waitFor("MATCH_STARTED", 2000);
 
     const liveFrame = { t: 20, peakDbfs: -12, rmsDbfs: -18, centroidHz: 1300, flatness: 0.4, clipped: false };
-    barker.client.send({ type: "BARK_FRAME", frame: liveFrame });
-    const broadcast = await listener.client.waitFor("BARK_FRAME_BROADCAST", 2000);
-    expect(broadcast.playerId).toBe(barker.playerId);
+    a.client.send({ type: "BARK_FRAME", frame: liveFrame });
+    const broadcast = await b.client.waitFor("BARK_FRAME_BROADCAST", 2000);
+    expect(broadcast.playerId).toBe(a.playerId);
     expect(broadcast.frame).toEqual(liveFrame);
   }, 10000);
 
@@ -387,7 +326,7 @@ describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", 
   }, 10000);
 
   it("wartet ein einzelner Spieler laenger als botFallbackMs ohne menschlichen Gegner, wird er mit einem Bot gepaart", async () => {
-    const harness = await createHarness({ botFallbackMs: 150, botBarkDelayMs: [10, 30] });
+    const harness = await createHarness({ botFallbackMs: 150 });
     currentHarness = harness;
 
     const a = await harness.connect("device-solo", "Solo");
@@ -403,9 +342,14 @@ describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", 
 
     const started = await a.client.waitFor("MATCH_STARTED", 2000);
     expect(started.style).toBe("tugofwar");
-    expect(started.playerOrder).toContain(bot!.id);
+    expect(started.participantIds).toContain(bot!.id);
 
-    const result = await playAgainstBot(a.client, a);
+    // Der Bot bellt server-seitig von selbst kontinuierlich weiter (siehe
+    // nextBotFrames) - der Mensch muss nur selbst bellen, kein Abwarten auf
+    // eine Spielreihenfolge noetig.
+    const stopA = startBarking(a.client, -5);
+    const result = await a.client.waitFor("MATCH_RESULT", 10000);
+    stopA();
     expect(result.standings).toHaveLength(2);
     expect(result.standings.some((s) => s.playerId === a.playerId)).toBe(true);
     expect(result.standings.some((s) => s.playerId === bot!.id)).toBe(true);
@@ -413,7 +357,7 @@ describe("GameServer - Kläffkarussell (Integration, echte WebSocket-Clients)", 
 });
 
 describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", () => {
-  it("2 Spieler: automatisch Duell-Modus, echter Ton per Default, Standings nach Rundensiegen", async () => {
+  it("2 Spieler: automatisch Duell-Modus, echter Ton per Default, wer lauter+laenger bellt gewinnt", async () => {
     const harness = await createHarness();
     currentHarness = harness;
 
@@ -432,18 +376,20 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
     const matchStarted = await host.client.waitFor("MATCH_STARTED", 2000);
     expect(matchStarted.style).toBe("tugofwar");
 
-    // Host immer lauter als Gast -> Seil zieht deterministisch zum Host,
-    // kein Zufall und kein fester Rundenzaehler entscheidet.
-    const result = await playTugOfWarMatch(host.client, [host, guest], (playerId) =>
-      playerId === host.playerId ? -3 : -30,
-    );
+    // Host immer lauter+durchgehend, Gast (fast) still -> Seil zieht deterministisch zum Host.
+    const stopHost = startBarking(host.client, -3);
+    const stopGuest = startBarking(guest.client, -45);
+    const result = await host.client.waitFor("MATCH_RESULT", 5000);
+    stopHost();
+    stopGuest();
+
     expect(result.standings).toHaveLength(2);
     expect(result.standings[0]?.playerId).toBe(host.playerId);
     expect(result.standings[0]?.rank).toBe(1);
     expect(result.standings[1]?.rank).toBe(2);
   }, 15000);
 
-  it("Echter Ton: eine gesendete Audio-Aufnahme wird an den Mitspieler relayed", async () => {
+  it("Echter Ton: ein gesendeter Audio-Chunk wird an den Mitspieler relayed", async () => {
     const harness = await createHarness();
     currentHarness = harness;
 
@@ -456,12 +402,13 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
 
     host.client.send({
       type: "AUDIO_BLOB_SUBMIT",
-      roundIndex: 0,
+      chunkSeq: 0,
       mimeType: "audio/webm;codecs=opus",
       dataBase64: "ZmFrZS1hdWRpby1kYXRh",
     });
     const broadcast = await guest.client.waitFor("AUDIO_BLOB_BROADCAST", 2000);
     expect(broadcast.playerId).toBe(host.playerId);
+    expect(broadcast.chunkSeq).toBe(0);
     expect(broadcast.mimeType).toBe("audio/webm;codecs=opus");
     expect(broadcast.dataBase64).toBe("ZmFrZS1hdWRpby1kYXRh");
   }, 10000);
@@ -482,7 +429,7 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
     const updated = await host.client.waitFor("LOBBY_STATE", 2000);
     expect(updated.lobby.audioMode).toBe("synth");
 
-    host.client.send({ type: "AUDIO_BLOB_SUBMIT", roundIndex: 0, mimeType: "audio/webm", dataBase64: "eA==" });
+    host.client.send({ type: "AUDIO_BLOB_SUBMIT", chunkSeq: 0, mimeType: "audio/webm", dataBase64: "eA==" });
     await expect(guest.client.waitFor("AUDIO_BLOB_BROADCAST", 500)).rejects.toThrow();
   }, 10000);
 
@@ -505,8 +452,8 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
     expect(error.code).toBe("MATCH_MODE_REQUIRED");
   }, 10000);
 
-  it("Rudel (3 Spieler): rankt nach Summe ueber 3 Zyklen (9 Runden)", async () => {
-    const harness = await createHarness();
+  it("Rudel (3 Spieler, alle gleichzeitig): rankt nach cumulativeScore nach Ablauf der festen Matchdauer", async () => {
+    const harness = await createHarness({ rudelDurationMs: 200 });
     currentHarness = harness;
 
     const host = await harness.connect("device-ru1", "Host");
@@ -523,13 +470,28 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
     await host.client.waitFor("LOBBY_STATE", 2000);
     host.client.send({ type: "LOBBY_START" });
     const matchStarted = await host.client.waitFor("MATCH_STARTED", 2000);
-    expect(matchStarted.totalRounds).toBe(9);
+    expect(matchStarted.style).toBe("rudel");
+    expect(matchStarted.participantIds.sort()).toEqual([host.playerId, p2.playerId, p3.playerId].sort());
 
-    await playFullMatch([host, p2, p3], 9);
-    const result = await host.client.waitFor("MATCH_RESULT", 2000);
+    // Alle drei bellen gleichzeitig und durchgehend, klar unterschiedlich laut
+    // -> deterministische Rangfolge, kein fester Rundenzaehler.
+    const stopHost = startBarking(host.client, -5);
+    const stopP2 = startBarking(p2.client, -20);
+    const stopP3 = startBarking(p3.client, -45);
+    const result = await host.client.waitFor("MATCH_RESULT", 5000);
+    stopHost();
+    stopP2();
+    stopP3();
+
     expect(result.standings).toHaveLength(3);
-    expect(result.standings[0]?.aggregateTotal).not.toBeNull();
-  }, 20000);
+    const rankOf = (playerId: string) => result.standings.find((s) => s.playerId === playerId)?.rank;
+    expect(rankOf(host.playerId)).toBe(1);
+    expect(rankOf(p2.playerId)).toBe(2);
+    expect(rankOf(p3.playerId)).toBe(3);
+    const scoreOf = (playerId: string) => result.standings.find((s) => s.playerId === playerId)?.cumulativeScore ?? 0;
+    expect(scoreOf(host.playerId)).toBeGreaterThan(scoreOf(p2.playerId));
+    expect(scoreOf(p2.playerId)).toBeGreaterThan(scoreOf(p3.playerId));
+  }, 15000);
 
   it("Kläffduell (Bracket, 3 Spieler): laeuft bis zu einem Champion durch", async () => {
     const harness = await createHarness();
@@ -549,23 +511,24 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
     await host.client.waitFor("LOBBY_STATE", 2000);
     host.client.send({ type: "LOBBY_START" });
 
-    const players = [host, p2, p3];
-    // Jeder Spieler bellt konstant unterschiedlich laut (Host am lautesten,
-    // P3 am leisesten) -> jedes Matchup (Tauzieh) loest sich deterministisch
-    // in wenigen Runden auf, unabhaengig davon wer das Freilos bekommt.
-    // 60 Runden Sicherheitsgrenze ist grosszuegig fuer 2 Matchups.
-    const peakByPlayer = new Map<string, number>([
-      [host.playerId, -5],
-      [p2.playerId, -20],
-      [p3.playerId, -45],
-    ]);
-    const finalResult = await playTugOfWarMatch(host.client, players, (playerId) => peakByPlayer.get(playerId)!, 60);
+    // Jeder Spieler bellt von Anfang an durchgehend unterschiedlich laut
+    // (Host am lautesten, P3 am leisesten) - welches Matchup auch immer
+    // gerade aktiv ist (Freilos/Paarung durch bracket.ts zufaellig), der
+    // Host gewinnt deterministisch jedes seiner Matchups und wird Champion.
+    const stopHost = startBarking(host.client, -5);
+    const stopP2 = startBarking(p2.client, -20);
+    const stopP3 = startBarking(p3.client, -45);
+    const finalResult = await host.client.waitFor("MATCH_RESULT", 10000);
+    stopHost();
+    stopP2();
+    stopP3();
+
     expect(finalResult.standings.find((s) => s.rank === 1)).toBeDefined();
     expect(finalResult.standings[0]?.playerId).toBe(host.playerId);
   }, 20000);
 
-  it("Disconnect mitten in der Runde, dann Reconnect mit Sitzung", async () => {
-    const harness = await createHarness({ roundTimeoutMs: 3000, disconnectGraceMs: 1500 });
+  it("Disconnect mitten im Match, dann Reconnect mit Sitzung - der Wiederverbundene kann weiterbellen", async () => {
+    const harness = await createHarness({ disconnectGraceMs: 1500 });
     currentHarness = harness;
 
     const host = await harness.connect("device-h1", "Host");
@@ -577,23 +540,24 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
     await guest.client.waitFor("LOBBY_STATE");
 
     host.client.send({ type: "LOBBY_START" });
-    const roundStarted = await guest.client.waitFor("ROUND_STARTED", 2000);
-    const barker = roundStarted.barkerPlayerId === host.playerId ? host : guest;
-    const other = barker === host ? guest : host;
+    await guest.client.waitFor("MATCH_STARTED", 2000);
 
-    barker.client.close();
-    await other.client.waitFor("PRESENCE_STATUS", 2000);
+    host.client.close();
+    await guest.client.waitFor("PRESENCE_STATUS", 2000);
 
     const reconnectClient = new TestClient(harness.url);
     harness.clients.push(reconnectClient);
     await reconnectClient.waitForOpen();
-    reconnectClient.send({ type: "RECONNECT", sessionToken: barker.sessionToken, playerId: barker.playerId });
+    reconnectClient.send({ type: "RECONNECT", sessionToken: host.sessionToken, playerId: host.playerId });
     const welcome = await reconnectClient.waitFor("WELCOME", 2000);
-    expect(welcome.playerId).toBe(barker.playerId);
+    expect(welcome.playerId).toBe(host.playerId);
 
-    reconnectClient.send({ type: "BARK_SUBMIT", frames: makeFrames(-5) });
-    const result = await other.client.waitFor("ROUND_RESULT", 3000);
-    expect(result.playerId).toBe(barker.playerId);
+    // Der wiederverbundene Host bellt laut+durchgehend, der Gast bleibt
+    // still -> das Match laeuft trotz Disconnect/Reconnect zuende.
+    const stopHost = startBarking(reconnectClient, -5);
+    const result = await guest.client.waitFor("MATCH_RESULT", 5000);
+    stopHost();
+    expect(result.standings[0]?.playerId).toBe(host.playerId);
   }, 10000);
 
   it("Host verlaesst eine private Lobby - der naechste Spieler wird Host", async () => {
@@ -629,8 +593,8 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
     expect(tabA.playerId).not.toBe(tabB.playerId);
   }, 10000);
 
-  it("Spieler sendet keine Frames - die Runde timed out automatisch mit Score 0", async () => {
-    const harness = await createHarness({ roundTimeoutMs: 200 });
+  it("bellt niemand, entscheidet der Sudden-Death-Fallback nie zufaellig bei exaktem Patt (Seil bleibt bei 0)", async () => {
+    const harness = await createHarness({ tugOfWarSuddenDeathMs: 100 });
     currentHarness = harness;
 
     const host = await harness.connect("device-t1", "Host");
@@ -641,8 +605,17 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
     await guest.client.waitFor("LOBBY_STATE");
 
     host.client.send({ type: "LOBBY_START" });
-    const result = await host.client.waitFor("ROUND_RESULT", 3000);
-    expect(result.score.total).toBe(0);
+    await host.client.waitFor("MATCH_STARTED", 2000);
+    // Niemand bellt - nach der (kurzen) Sudden-Death-Zeit darf trotzdem noch
+    // kein MATCH_RESULT da sein, weil das Seil exakt bei 0 steht (kein
+    // Zufallsentscheid bei echtem Patt, siehe isLiveMatchFinished).
+    await expect(host.client.waitFor("MATCH_RESULT", 400)).rejects.toThrow();
+
+    // Sobald einer bellt, entscheidet sich das Match trotzdem sofort.
+    const stopHost = startBarking(host.client, -5);
+    const result = await host.client.waitFor("MATCH_RESULT", 3000);
+    stopHost();
+    expect(result.standings[0]?.playerId).toBe(host.playerId);
   }, 10000);
 
   it("Nickname-Filter: gesperrter Name wird beim Handshake durch Fallback ersetzt", async () => {
@@ -658,8 +631,8 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
     expect(rejected.fallbackNickname).not.toMatch(/hurensohn/iu);
   }, 10000);
 
-  it("Bot zu einer privaten Lobby hinzufuegen: Runde laeuft komplett durch, ohne zweiten Menschen (Solo-Test fuers iPad)", async () => {
-    const harness = await createHarness({ botBarkDelayMs: [10, 30] });
+  it("Bot zu einer privaten Lobby hinzufuegen: Match laeuft komplett durch, ohne zweiten Menschen (Solo-Test fuers iPad)", async () => {
+    const harness = await createHarness();
     currentHarness = harness;
 
     const host = await harness.connect("device-bot1", "Host");
@@ -677,7 +650,11 @@ describe("GameServer - Private Lobby (Integration, echte WebSocket-Clients)", ()
     const started = await host.client.waitFor("MATCH_STARTED", 2000);
     expect(started.style).toBe("tugofwar");
 
-    const result = await playAgainstBot(host.client, host);
+    // Der Bot bellt server-seitig von selbst kontinuierlich (nextBotFrames)
+    // - der Mensch muss nur selbst durchgehend bellen.
+    const stopHost = startBarking(host.client, -5);
+    const result = await host.client.waitFor("MATCH_RESULT", 10000);
+    stopHost();
     expect(result.standings).toHaveLength(2);
     expect(result.standings.some((s) => s.playerId === bot!.id)).toBe(true);
   }, 20000);

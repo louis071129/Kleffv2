@@ -1,30 +1,14 @@
 "use client";
 
 import { create } from "zustand";
-import type { AntiCheatFlag, BarkScore, CalibrationProfile } from "@klaeff/scoring";
-import type { AvatarSeed, RoundResult, ServerMessage } from "@klaeff/protocol";
+import type { AntiCheatFlag } from "@klaeff/scoring";
+import type { AvatarSeed, ServerMessage } from "@klaeff/protocol";
 import { getKlaeffClient, type ConnectionStatus } from "../ws-client";
 import { DEFAULT_AVATAR, getOrCreateDeviceUuid, loadAvatar, loadNickname, saveAvatar, saveNickname } from "../storage";
 
 type LobbySnapshot = Extract<ServerMessage, { type: "LOBBY_STATE" }>["lobby"];
 type MatchStandings = Extract<ServerMessage, { type: "MATCH_RESULT" }>["standings"];
-type MatchStyle = Extract<ServerMessage, { type: "MATCH_STARTED" }>["style"];
-
-/**
- * ROUND_RESULT traegt keine Kalibrierung ueber die Leitung (die ist server-
- * intern fuer den naechsten Score-Vergleich relevant, nicht fuer die Anzeige).
- * computeTugOfWarState() braucht sie nicht (nur score.total) - dieser
- * Platzhalter erfuellt nur den RoundResult-Typ fuer die client-seitige
- * Wiederverwendung der geteilten Tauzieh-Funktion.
- */
-const UNUSED_CALIBRATION: CalibrationProfile = {
-  noiseFloorDbfs: 0,
-  refVoiceDbfs: 0,
-  maxObservedDbfs: 0,
-  headroomDb: 0,
-  agcActive: false,
-  calibratedAt: 0,
-};
+type LiveMatchStyle = Extract<ServerMessage, { type: "MATCH_STARTED" }>["style"];
 
 export type Screen = "home" | "calibration" | "queue" | "lobby" | "match" | "result";
 
@@ -32,6 +16,20 @@ export interface EmoteEvent {
   readonly id: string;
   readonly playerId: string;
   readonly emote: string;
+}
+
+/**
+ * Laufender Zustand eines Live-Matches (kein Knopf, kein Abwechseln - alle
+ * bellen durchgehend ab Matchstart, siehe live-match.ts). Bei "tugofwar"
+ * (2 Spieler) zusaetzlich ropePosition fuer die Tauzieh-Skala, bei "rudel"
+ * ist sie null (siehe LIVE_MATCH_UPDATE-Schema).
+ */
+export interface LiveMatchViewState {
+  readonly matchId: string;
+  readonly style: LiveMatchStyle;
+  readonly participantIds: readonly string[];
+  readonly scores: Readonly<Record<string, number>>;
+  readonly ropePosition: number | null;
 }
 
 interface GameStoreState {
@@ -43,15 +41,7 @@ interface GameStoreState {
   screen: Screen;
 
   lobby: LobbySnapshot | null;
-  matchId: string | null;
-  totalRounds: number | null;
-  /** "tugofwar" (Kläffkarussell/Duell/Kläffduell-Matchup) oder "sequence" (Rudel). */
-  matchStyle: MatchStyle | null;
-  matchPlayerOrder: readonly string[];
-  /** Alle bisherigen Rundenergebnisse dieses Matches - fuer die live berechnete Seilposition/Rudel-Rangliste. */
-  matchRoundResults: readonly RoundResult[];
-  currentRound: { roundIndex: number; barkerPlayerId: string; windowMs: number } | null;
-  lastRoundResult: { roundIndex: number; playerId: string; score: BarkScore } | null;
+  liveMatch: LiveMatchViewState | null;
   matchStandings: MatchStandings | null;
   levels: Record<string, number>;
   latestEmote: EmoteEvent | null;
@@ -94,33 +84,32 @@ export const useGameStore = create<GameStoreState>((set, get) => {
 
     client.on("MATCH_STARTED", (msg) =>
       set({
-        matchId: msg.matchId,
-        totalRounds: msg.totalRounds,
-        matchStyle: msg.style,
-        matchPlayerOrder: msg.playerOrder,
-        matchRoundResults: [],
+        liveMatch: {
+          matchId: msg.matchId,
+          style: msg.style,
+          participantIds: msg.participantIds,
+          scores: Object.fromEntries(msg.participantIds.map((id) => [id, 0])),
+          ropePosition: null,
+        },
         screen: "match",
         matchStandings: null,
       }),
     );
 
-    client.on("ROUND_STARTED", (msg) =>
-      set({
-        currentRound: { roundIndex: msg.roundIndex, barkerPlayerId: msg.barkerPlayerId, windowMs: msg.windowMs },
+    client.on("LIVE_MATCH_UPDATE", (msg) =>
+      set((state) => {
+        if (!state.liveMatch) return {};
+        return {
+          liveMatch: {
+            ...state.liveMatch,
+            scores: Object.fromEntries(msg.scores.map((s) => [s.playerId, s.cumulativeScore])),
+            ropePosition: msg.ropePosition,
+          },
+        };
       }),
     );
 
-    client.on("ROUND_RESULT", (msg) =>
-      set((state) => ({
-        lastRoundResult: { roundIndex: msg.roundIndex, playerId: msg.playerId, score: msg.score },
-        matchRoundResults: [
-          ...state.matchRoundResults,
-          { playerId: msg.playerId, roundIndex: msg.roundIndex, score: msg.score, calibration: UNUSED_CALIBRATION },
-        ],
-      })),
-    );
-
-    client.on("MATCH_RESULT", (msg) => set({ matchStandings: msg.standings, screen: "result", currentRound: null }));
+    client.on("MATCH_RESULT", (msg) => set({ matchStandings: msg.standings, screen: "result", liveMatch: null }));
 
     client.on("LEVEL_BROADCAST", (msg) =>
       set((state) => ({ levels: { ...state.levels, [msg.playerId]: msg.level } })),
@@ -155,13 +144,7 @@ export const useGameStore = create<GameStoreState>((set, get) => {
     screen: "home",
 
     lobby: null,
-    matchId: null,
-    totalRounds: null,
-    matchStyle: null,
-    matchPlayerOrder: [],
-    matchRoundResults: [],
-    currentRound: null,
-    lastRoundResult: null,
+    liveMatch: null,
     matchStandings: null,
     levels: {},
     latestEmote: null,
@@ -187,12 +170,7 @@ export const useGameStore = create<GameStoreState>((set, get) => {
       set({
         screen: "home",
         lobby: null,
-        matchId: null,
-        totalRounds: null,
-        matchStyle: null,
-        matchPlayerOrder: [],
-        matchRoundResults: [],
-        currentRound: null,
+        liveMatch: null,
         matchStandings: null,
       }),
     setScreen: (screen) => set({ screen }),

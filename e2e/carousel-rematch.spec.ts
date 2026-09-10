@@ -1,14 +1,14 @@
 import { test, expect } from "@playwright/test";
-import { joinCarousel, playTugOfWarUntilResult } from "./helpers";
+import { joinCarousel, waitForMatchResult } from "./helpers";
 
 test.describe("Kläffkarussell", () => {
-  test("zwei Spieler werden sofort gepaart, spielen ein Tauzieh-Match und werden per Re-Pairing erneut gematcht", async ({
+  test("zwei Spieler werden sofort gepaart, bellen durchgehend und werden per Re-Pairing erneut gematcht", async ({
     browser,
   }, testInfo) => {
     // Alle E2E-Kontexte teilen dieselbe Fake-Audio-Datei -> das Tauzieh-Match
-    // wird ueber den Sudden-Death-Fallback entschieden (bis zu 15 Runden,
-    // siehe playTugOfWarUntilResult), zweimal hintereinander (Erstbegegnung +
-    // Re-Pairing) - grosszuegiger Timeout dafuer.
+    // wird ueber den Sudden-Death-Fallback entschieden (siehe waitForMatchResult),
+    // zweimal hintereinander (Erstbegegnung + Re-Pairing) - grosszuegiger
+    // Timeout dafuer.
     testInfo.setTimeout(240_000);
     const contextA = await browser.newContext();
     const contextB = await browser.newContext();
@@ -33,10 +33,10 @@ test.describe("Kläffkarussell", () => {
     // Hinweistext: nie die echte Stimme, siehe Auftrag.
     await expect(a.getByText(/niemand hört deine echte Stimme/u)).toBeVisible({ timeout: 10000 });
 
-    // Begegnung = Tauzieh-Match, dynamische Rundenzahl (Seil-Schwelle statt
-    // fester Zyklenzahl, siehe packages/protocol/src/tug-of-war.ts) - nie
-    // zufaellig entschieden.
-    await playTugOfWarUntilResult([a, b]);
+    // Begegnung = Tauzieh-Match: kein Knopf, kein Abwechseln - beide bellen
+    // durchgehend ab Matchstart, das Seil bewegt sich live (siehe
+    // packages/protocol/src/live-match.ts) - nie zufaellig entschieden.
+    await waitForMatchResult([a, b]);
 
     await expect(a.getByText(/SIEG!|NIEDERLAGE/u)).toBeVisible({ timeout: 10000 });
     await expect(b.getByText(/SIEG!|NIEDERLAGE/u)).toBeVisible({ timeout: 10000 });

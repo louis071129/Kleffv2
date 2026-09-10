@@ -1,13 +1,13 @@
 import { test, expect } from "@playwright/test";
-import { createPrivateLobby, joinPrivateLobby, playTugOfWarUntilResult } from "./helpers";
+import { createPrivateLobby, joinPrivateLobby, waitForMatchResult } from "./helpers";
 
 test.describe("Private Lobby: 2-Spieler-Duell mit echtem Ton", () => {
-  test("zwei Spieler joinen per Code, spielen ein komplettes Tauzieh-Duell mit echtem Ton und sehen das Ergebnis", async ({
+  test("zwei Spieler joinen per Code, bellen durchgehend (kein Knopf) und sehen das Tauzieh-Ergebnis", async ({
     browser,
   }, testInfo) => {
     // Alle E2E-Kontexte teilen dieselbe Fake-Audio-Datei -> das Tauzieh-Match
-    // wird ueber den Sudden-Death-Fallback entschieden (bis zu 15 Runden,
-    // siehe playTugOfWarUntilResult) - grosszuegiger Timeout dafuer.
+    // wird ueber den Sudden-Death-Fallback entschieden (siehe waitForMatchResult)
+    // - grosszuegiger Timeout dafuer.
     testInfo.setTimeout(150_000);
     const hostContext = await browser.newContext();
     const guestContext = await browser.newContext();
@@ -28,10 +28,10 @@ test.describe("Private Lobby: 2-Spieler-Duell mit echtem Ton", () => {
 
     await host.getByRole("button", { name: "Match starten" }).click();
 
-    // Bei genau 2 Spielern startet automatisch der Duell-Modus: Tauzieh mit
-    // dynamischer Rundenzahl (Seil-Schwelle statt fester Zyklenzahl, siehe
-    // packages/protocol/src/tug-of-war.ts) statt eines festen Best-of-N.
-    await playTugOfWarUntilResult([host, guest]);
+    // Bei genau 2 Spielern startet automatisch der Duell-Modus: kein Knopf,
+    // kein Abwechseln - beide bellen ab Matchstart durchgehend, das Seil
+    // bewegt sich live (siehe packages/protocol/src/live-match.ts).
+    await waitForMatchResult([host, guest]);
 
     await expect(host.getByText(/SIEG!|NIEDERLAGE/u)).toBeVisible({ timeout: 10000 });
     await expect(guest.getByText(/SIEG!|NIEDERLAGE/u)).toBeVisible({ timeout: 10000 });

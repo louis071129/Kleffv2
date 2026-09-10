@@ -1,4 +1,4 @@
-import type { AntiCheatFlag, BarkScore, BotDifficulty, CalibrationProfile } from "@klaeff/scoring";
+import type { AntiCheatFlag, BotDifficulty } from "@klaeff/scoring";
 
 export type PlayerId = string;
 export type LobbyId = string;
@@ -57,19 +57,22 @@ export interface Lobby {
   readonly updatedAt: number;
 }
 
-export interface RoundResult {
-  readonly playerId: PlayerId;
-  readonly roundIndex: number;
-  readonly score: BarkScore;
-  readonly calibration: CalibrationProfile;
-}
+/**
+ * "tugofwar": 2 Spieler (Kläffkarussell-Begegnung, Duell, ein Kläffduell-
+ * Matchup) - Seilposition = Differenz der cumulativeScores, endet sofort
+ * bei ±TUG_OF_WAR_LIVE_THRESHOLD. "rudel": 3+ Spieler gleichzeitig - jeder
+ * akkumuliert unabhaengig, Match laeuft eine feste Dauer, Rangliste nach
+ * cumulativeScore. Siehe live-match.ts.
+ */
+export type LiveMatchStyle = "tugofwar" | "rudel";
 
-export interface Match {
+export interface LiveMatchState {
   readonly id: MatchId;
   readonly lobbyId: LobbyId;
-  readonly playerOrder: readonly PlayerId[];
-  readonly currentRoundIndex: number;
-  readonly results: readonly RoundResult[];
+  readonly participantIds: readonly PlayerId[];
+  readonly style: LiveMatchStyle;
+  /** Laufende Gesamtpunktzahl pro Spieler - Integral der Lautstaerke ueber die Zeit, siehe live-match.ts. */
+  readonly cumulativeScores: Readonly<Record<PlayerId, number>>;
   readonly phase: "in-progress" | "finished";
   readonly startedAt: number;
   readonly finishedAt: number | null;
@@ -78,10 +81,8 @@ export interface Match {
 export interface Standing {
   readonly playerId: PlayerId;
   readonly rank: number;
-  /** Repraesentatives Einzelergebnis (fuer Breakdown-Anzeige) - bei Rudel das beste der Runden. */
-  readonly result: RoundResult | null;
-  /** Summe der Einzel-Scores bei Rudel (mehrere Runden pro Spieler), sonst null. */
-  readonly aggregateTotal: number | null;
+  /** Finale Gesamtpunktzahl (Integral der Lautstaerke ueber die Matchdauer) - die einzige noch relevante Zahl, egal ob Tauzieh oder Rudel. */
+  readonly cumulativeScore: number;
 }
 
 export type PublicFlagLabel = AntiCheatFlag;

@@ -3,11 +3,13 @@
 import { getKlaeffClient } from "../ws-client";
 import { createAudioPipeline, requestMicrophone, type AudioPipeline } from "./capture";
 import { buildCalibrationProfile, type CalibrationOutcome } from "./calibration";
-import { blobToBase64, recordWindow } from "./recorder";
+import { blobToBase64, startContinuousRecording, type ContinuousRecording } from "./recorder";
 import { loadCalibration, saveCalibration } from "../storage";
 import type { CalibrationProfile } from "@klaeff/scoring";
 
 const LEVEL_BROADCAST_INTERVAL_MS = 100; // 10 Hz
+/** Chunk-Laenge fuer "Echter Ton" waehrend eines laufenden Live-Matches, siehe startLiveBarking. */
+const AUDIO_CHUNK_MS = 300;
 
 function dbfsToLevel(dbfs: number, cal: CalibrationProfile | null): number {
   const floor = cal?.noiseFloorDbfs ?? -60;
@@ -25,6 +27,11 @@ export class AudioSession {
   private pipeline: AudioPipeline | null = null;
   private levelInterval: ReturnType<typeof setInterval> | null = null;
   private calibration: CalibrationProfile | null = loadCalibration();
+  private liveBarkUnsubscribe: (() => void) | null = null;
+  private continuousRecording: ContinuousRecording | null = null;
+  private audioChunkSeq = 0;
+  /** Verkettet die Base64-Kodierung der Aufnahme-Chunks, damit AUDIO_BLOB_SUBMIT immer in Aufnahmereihenfolge rausgeht (FileReader-Callbacks koennen sonst ausser der Reihe feuern). */
+  private audioSendChain: Promise<void> = Promise.resolve();
 
   getCalibration(): CalibrationProfile | null {
     return this.calibration;
@@ -88,31 +95,45 @@ export class AudioSession {
   }
 
   /**
-   * Faengt ein Bellfenster ein und sendet es fuers Scoring. Streamt dabei
-   * IMMER die Feature-Frames live mit (BARK_FRAME) - der Server relayt sie
-   * nur weiter, wenn der Empfaenger tatsaechlich einen Bark-Synth rendert
-   * (Kläffkarussell oder private Lobby ohne "Echter Ton"), harmlos sonst.
-   * `recordAudio=true` nimmt zusaetzlich echten Ton auf (private Lobby mit
-   * "Echter Ton") - faellt still auf reinen Synth zurueck, wenn der Browser
-   * MediaRecorder/Opus nicht unterstuetzt (siehe lib/audio/recorder.ts).
+   * Startet das durchgehende Bellen fuer die gesamte Matchdauer (kein Knopf,
+   * kein Abwechseln mehr - siehe Auftrag): streamt ab sofort ununterbrochen
+   * die Feature-Frames (BARK_FRAME), aus denen der Server per Tick die Live-
+   * Wertung berechnet. `recordAudio=true` nimmt zusaetzlich in kurzen Chunks
+   * echten Ton auf (private Lobby mit "Echter Ton") - faellt still auf
+   * reinen Synth zurueck, wenn der Browser MediaRecorder/Opus nicht
+   * unterstuetzt (siehe lib/audio/recorder.ts). Idempotent: ein zweiter
+   * Aufruf ohne vorheriges stopLiveBarking() ist ein no-op.
    */
-  async captureBarkWindow(windowMs: number, roundIndex: number, recordAudio: boolean): Promise<void> {
+  startLiveBarking(recordAudio: boolean): void {
     if (!this.pipeline) {
       throw new Error("Audio-Pipeline nicht gestartet.");
     }
-    const unsubscribeLive = this.pipeline.onFrame((frame) => {
+    if (this.liveBarkUnsubscribe) {
+      return;
+    }
+    this.liveBarkUnsubscribe = this.pipeline.onFrame((frame) => {
       getKlaeffClient().send({ type: "BARK_FRAME", frame });
     });
-    const recordingPromise = recordAudio ? recordWindow(this.pipeline.stream, windowMs) : Promise.resolve(null);
-    const frames = await this.pipeline.captureWindow(windowMs);
-    unsubscribeLive();
-    getKlaeffClient().send({ type: "BARK_SUBMIT", frames });
-
-    const recording = await recordingPromise;
-    if (recording) {
-      const dataBase64 = await blobToBase64(recording.blob);
-      getKlaeffClient().send({ type: "AUDIO_BLOB_SUBMIT", roundIndex, mimeType: recording.mimeType, dataBase64 });
+    if (recordAudio) {
+      this.audioChunkSeq = 0;
+      this.audioSendChain = Promise.resolve();
+      this.continuousRecording = startContinuousRecording(this.pipeline.stream, AUDIO_CHUNK_MS, (chunk) => {
+        const chunkSeq = this.audioChunkSeq;
+        this.audioChunkSeq += 1;
+        this.audioSendChain = this.audioSendChain
+          .then(() => blobToBase64(chunk.blob))
+          .then((dataBase64) => {
+            getKlaeffClient().send({ type: "AUDIO_BLOB_SUBMIT", chunkSeq, mimeType: chunk.mimeType, dataBase64 });
+          });
+      });
     }
+  }
+
+  stopLiveBarking(): void {
+    this.liveBarkUnsubscribe?.();
+    this.liveBarkUnsubscribe = null;
+    this.continuousRecording?.stop();
+    this.continuousRecording = null;
   }
 }
 

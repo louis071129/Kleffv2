@@ -33,27 +33,11 @@ export const CalibrationProfileSchema = z.object({
 
 export const AntiCheatFlagSchema = z.enum(["MIC_OVERLOAD", "REPLAY_SUSPECT", "CALIBRATION_MISMATCH"]);
 
-export const BarkScoreSchema = z.object({
-  total: z.number(),
-  breakdown: z.object({
-    loudness: z.number(),
-    attack: z.number(),
-    crest: z.number(),
-    character: z.number(),
-  }),
-  flags: z.array(AntiCheatFlagSchema),
-  peakDbfs: z.number(),
-  peakTimeMs: z.number(),
-  activeDurationMs: z.number(),
-});
-
 export const StandingSchema = z.object({
   playerId: z.string(),
   rank: z.number(),
-  /** Repraesentatives Einzelergebnis (Karussell: die eine Runde, Duell/Rudel: eine Beispielrunde fuer die Breakdown-Anzeige). */
-  score: BarkScoreSchema.nullable(),
-  /** Summe der Einzel-Scores bei Rudel, sonst null. */
-  aggregateTotal: z.number().nullable(),
+  /** Finale Gesamtpunktzahl (Integral der Lautstaerke ueber die Matchdauer) - siehe live-match.ts. */
+  cumulativeScore: z.number(),
 });
 
 /** Die drei Bot-Schwierigkeitsstufen, siehe packages/scoring/src/bot.ts. */
@@ -132,17 +116,16 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LOBBY_START") }),
   z.object({ type: z.literal("LEVEL_UPDATE"), level: z.number().min(0).max(100) }),
   z.object({ type: z.literal("CALIBRATION_SUBMIT"), profile: CalibrationProfileSchema }),
-  z.object({ type: z.literal("BARK_SUBMIT"), frames: z.array(AudioFrameSchema).min(1).max(200) }),
-  // Live-Streaming waehrend des Bellfensters (nicht erst am Ende), fuer den
-  // Bark-Synth beim Gegner im Kläffkarussell - siehe Auftrag. Nie Rohaudio.
+  // Durchgehendes Live-Streaming waehrend des ganzen Matches (kein 3s-Fenster
+  // mehr, kein Knopf) - treibt sowohl die serverseitige Live-Wertung als auch
+  // den Bark-Synth beim Gegner im Kläffkarussell. Nie Rohaudio.
   z.object({ type: z.literal("BARK_FRAME"), frame: AudioFrameSchema }),
-  // Echter Ton in privaten Lobbys: komprimierte Aufnahme des Bellfensters,
-  // Base64-kodiert innerhalb der JSON-Nachricht (kein Binaer-WS-Rahmen noetig
-  // fuer die kurzen ~3s-Fenster). Server haelt das nur in-memory, siehe
-  // server/game-server.ts.
+  // Echter Ton in privaten Lobbys: durchgehende komprimierte Aufnahme in
+  // kurzen Chunks (kein Binaer-WS-Rahmen noetig fuer die kleinen Chunks).
+  // Server haelt das nur in-memory, siehe server/game-server.ts.
   z.object({
     type: z.literal("AUDIO_BLOB_SUBMIT"),
-    roundIndex: z.number().int(),
+    chunkSeq: z.number().int(),
     mimeType: z.string().min(1).max(100),
     dataBase64: z.string().min(1).max(2_000_000),
   }),
@@ -166,30 +149,30 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("MATCH_STARTED"),
     matchId: z.string(),
-    playerOrder: z.array(z.string()),
-    totalRounds: z.number().int(),
-    // "tugofwar": Kläffkarussell/Duell/Kläffduell-Matchup - dynamische Laenge,
-    // entschieden per Seil-Schwelle (siehe packages/protocol/src/tug-of-war.ts).
-    // "sequence": Rudel - feste Rundenzahl, Ranking nach Score-Summe.
-    style: z.enum(["tugofwar", "sequence"]),
+    participantIds: z.array(z.string()),
+    // "tugofwar": 2 Spieler (Kläffkarussell/Duell/Kläffduell-Matchup) - Seil,
+    // endet sofort bei ±100. "rudel": 3+ Spieler gleichzeitig, feste Dauer,
+    // Rangliste nach cumulativeScore. Siehe packages/protocol/src/live-match.ts.
+    style: z.enum(["tugofwar", "rudel"]),
   }),
-  z.object({ type: z.literal("ROUND_STARTED"), roundIndex: z.number(), barkerPlayerId: z.string(), windowMs: z.number() }),
   z.object({ type: z.literal("LEVEL_BROADCAST"), playerId: z.string(), level: z.number() }),
-  // Live-Relay der Feature-Frames waehrend des Bellfensters (Kläffkarussell:
+  // Live-Relay der Feature-Frames waehrend des ganzen Matches (Kläffkarussell:
   // treibt den Bark-Synth beim Gegner). Nie Rohaudio.
   z.object({ type: z.literal("BARK_FRAME_BROADCAST"), playerId: z.string(), frame: AudioFrameSchema }),
   z.object({
     type: z.literal("AUDIO_BLOB_BROADCAST"),
     playerId: z.string(),
-    roundIndex: z.number().int(),
+    chunkSeq: z.number().int(),
     mimeType: z.string(),
     dataBase64: z.string(),
   }),
+  // Tick-Update des laufenden Live-Matches (alle TICK_MS, siehe live-match.ts) -
+  // treibt die Tauzieh-Skala/Rudel-Rangliste live, ohne dass ein Knopf
+  // gedrueckt werden muss. ropePosition nur bei style "tugofwar" gesetzt.
   z.object({
-    type: z.literal("ROUND_RESULT"),
-    roundIndex: z.number(),
-    playerId: z.string(),
-    score: BarkScoreSchema,
+    type: z.literal("LIVE_MATCH_UPDATE"),
+    scores: z.array(z.object({ playerId: z.string(), cumulativeScore: z.number() })),
+    ropePosition: z.number().nullable(),
   }),
   z.object({
     type: z.literal("MATCH_RESULT"),

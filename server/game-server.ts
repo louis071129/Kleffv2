@@ -1,46 +1,50 @@
 import { randomUUID } from "node:crypto";
 import { WebSocket, type WebSocketServer } from "ws";
-import { generateSyntheticBarkFrames, scoreBark, type AudioFrame, type BarkScore, type BotDifficulty, type CalibrationProfile } from "@klaeff/scoring";
+import {
+  computeLiveIntensity,
+  generateSyntheticBarkFrames,
+  type AntiCheatFlag,
+  type AudioFrame,
+  type BotDifficulty,
+  type CalibrationProfile,
+} from "@klaeff/scoring";
 import {
   addBotToLobby,
   addPlayer,
   addReport,
   advanceBracket,
-  buildDuelPlayerOrder,
-  buildRudelPlayerOrder,
-  computeAggregateStandings,
-  computeTugOfWarStandings,
-  computeTugOfWarState,
-  createBracket,
+  applyLiveTick,
+  computeLiveStandings,
   createBotPlayer,
+  createBracket,
   createCarouselLobby,
   createCarouselState,
-  createMatchWithOrder,
+  createLiveMatch,
   createPrivateLobby,
   createReportState,
-  currentBarker,
   dequeueFromCarousel,
   enqueueForCarousel,
   isBotPlayer,
   isCurrentRoundComplete,
   isDeviceExcludedFromPublicQueue,
-  isMatchFinished,
+  isLiveMatchFinished,
   isQueued,
-  isTugOfWarFinished,
   kickPlayer,
   LobbyError,
-  MatchError,
   nextUndecidedMatchup,
   parseClientMessage,
   randomBotDifficulty,
   recordMatchupResult,
   removePlayer,
+  ropePositionOf,
+  RUDEL_LIVE_DURATION_MS,
   sanitizeNickname,
   setAudioMode,
   setMatchMode,
   setMaxPlayers,
   startPrivateLobby,
-  submitRoundResult,
+  TUG_OF_WAR_LIVE_THRESHOLD,
+  TUG_OF_WAR_SUDDEN_DEATH_MS,
   tryPairNext,
 } from "@klaeff/protocol";
 import type {
@@ -51,44 +55,38 @@ import type {
   DeviceUuid,
   Lobby,
   LobbyId,
-  Match,
+  LiveMatchState,
+  LiveMatchStyle,
   MatchId,
   Player,
   PlayerId,
   PrivateMatchMode,
   ServerMessage,
-  Standing,
 } from "@klaeff/protocol";
-
-/** Rudel: alle Spieler nacheinander, das Ganze fuer 3 Zyklen ("Ranking ueber 3 Runden"), siehe Auftrag. */
-const RUDEL_CYCLES = 3;
-/**
- * Kläffkarussell/Duell/Kläffduell-Matchup sind jetzt Tauzieh-Matches: die
- * Rundenreihenfolge muss nur lang genug sein, dass sie in der Praxis nie
- * ausgeht (echte Beendigung entscheidet isTugOfWarFinished per Seil-Schwelle
- * oder Sudden-Death, siehe packages/protocol/src/tug-of-war.ts) - 40 Zyklen
- * = 80 Runden ist weit mehr als der Sudden-Death-Punkt je erreichen sollte.
- */
-const TUG_OF_WAR_MAX_CYCLES = 40;
 
 type MatchKind = "carousel" | "duell" | "rudel" | "bracket";
 
-function matchStyleForKind(kind: MatchKind): "tugofwar" | "sequence" {
-  return kind === "rudel" ? "sequence" : "tugofwar";
+function matchStyleForKind(kind: MatchKind): LiveMatchStyle {
+  return kind === "rudel" ? "rudel" : "tugofwar";
 }
 
+/** Frame-Intervall fuer synthetische Bot-Frames - identisch zu FRAME_INTERVAL_MS in packages/scoring/src/bot.ts (dort nicht exportiert). */
+const BOT_FRAME_INTERVAL_MS = 20;
+
 export interface GameServerOptions {
-  readonly roundTimeoutMs?: number;
+  /** Intervall, in dem ein laufendes Live-Match seine Intensitaet akkumuliert und LIVE_MATCH_UPDATE broadcastet, siehe live-match.ts. */
+  readonly liveTickIntervalMs?: number;
   readonly tickIntervalMs?: number;
   readonly disconnectGraceMs?: number;
   readonly heartbeatIntervalMs?: number;
   readonly levelBroadcastMinIntervalMs?: number;
-  readonly maxEnvelopeHistoryPerPlayer?: number;
   readonly idleLobbyGcMs?: number;
   /** Wartet ein Spieler im Kläffkarussell so lange ohne menschlichen Gegner, wird er mit einem Bot gepaart, siehe Auftrag. */
   readonly botFallbackMs?: number;
-  /** [min, max] Verzoegerung in ms, bevor ein Bot in seiner Runde "bellt" - fuer eine natuerlichere Pacing, kein Instant-Ergebnis. */
-  readonly botBarkDelayMs?: readonly [number, number];
+  /** Nur fuer Tests gedacht (schnellere Matches) - im Produktivbetrieb immer der Standardwert aus live-match.ts. */
+  readonly tugOfWarThreshold?: number;
+  readonly tugOfWarSuddenDeathMs?: number;
+  readonly rudelDurationMs?: number;
   readonly now?: () => number;
 }
 
@@ -101,10 +99,11 @@ interface ServerSession {
   disconnectGraceTimer: ReturnType<typeof setTimeout> | null;
 }
 
-interface RoundTimer {
-  matchId: MatchId;
-  roundIndex: number;
-  timer: ReturnType<typeof setTimeout>;
+/** Fortlaufender Zustand eines Bot-Frame-Stroms fuer genau ein laufendes Match, siehe nextBotFrames unten. */
+interface BotStreamState {
+  frames: AudioFrame[];
+  cursor: number;
+  cycleIndex: number;
 }
 
 const DEFAULT_CALIBRATION: CalibrationProfile = {
@@ -129,17 +128,19 @@ export class GameServer {
   private readonly sessionsByToken = new Map<string, ServerSession>();
   private readonly sessionsByPlayerId = new Map<PlayerId, ServerSession>();
   private readonly lobbies = new Map<LobbyId, Lobby>();
-  private readonly matches = new Map<MatchId, Match>();
+  private readonly matches = new Map<MatchId, LiveMatchState>();
   private readonly matchKindByMatchId = new Map<MatchId, MatchKind>();
   private readonly lobbyIdByPlayerId = new Map<PlayerId, LobbyId>();
   private readonly matchIdByLobbyId = new Map<LobbyId, MatchId>();
   private readonly bracketByLobbyId = new Map<LobbyId, BracketState>();
   private readonly currentMatchupByLobbyId = new Map<LobbyId, string>();
   private readonly calibrationByPlayerId = new Map<PlayerId, CalibrationProfile>();
-  private readonly envelopeHistoryByPlayerId = new Map<PlayerId, number[][]>();
   private readonly lastLevelBroadcastAt = new Map<PlayerId, number>();
-  private readonly roundTimers = new Map<MatchId, RoundTimer>();
-  private readonly botBarkTimers = new Map<MatchId, ReturnType<typeof setTimeout>>();
+  private readonly tickIntervalsByMatchId = new Map<MatchId, ReturnType<typeof setInterval>>();
+  /** Rollierender Frame-Puffer pro Spieler - befuellt durch BARK_FRAME, geleert bei jedem Live-Tick (siehe runLiveTick). Existiert nur, waehrend der Spieler an einem laufenden Match teilnimmt. */
+  private readonly frameBufferByPlayerId = new Map<PlayerId, AudioFrame[]>();
+  /** Kontinuierlicher Bark/Pause-Strom pro Bot innerhalb eines Matches, siehe nextBotFrames. Key: `${matchId}:${playerId}`. */
+  private readonly botStreamByKey = new Map<string, BotStreamState>();
   private readonly playerProfiles = new Map<PlayerId, { nickname: string; avatar: AvatarSeed; deviceUuid: DeviceUuid }>();
   private carouselState = createCarouselState();
   private reportState = createReportState();
@@ -148,15 +149,16 @@ export class GameServer {
 
   constructor(options: GameServerOptions = {}) {
     this.options = {
-      roundTimeoutMs: options.roundTimeoutMs ?? 6_000,
+      liveTickIntervalMs: options.liveTickIntervalMs ?? 150,
       tickIntervalMs: options.tickIntervalMs ?? 1_000,
       disconnectGraceMs: options.disconnectGraceMs ?? 60_000,
       heartbeatIntervalMs: options.heartbeatIntervalMs ?? 15_000,
       levelBroadcastMinIntervalMs: options.levelBroadcastMinIntervalMs ?? 100,
-      maxEnvelopeHistoryPerPlayer: options.maxEnvelopeHistoryPerPlayer ?? 5,
       idleLobbyGcMs: options.idleLobbyGcMs ?? 30 * 60_000,
       botFallbackMs: options.botFallbackMs ?? 6_000,
-      botBarkDelayMs: options.botBarkDelayMs ?? [500, 2000],
+      tugOfWarThreshold: options.tugOfWarThreshold ?? TUG_OF_WAR_LIVE_THRESHOLD,
+      tugOfWarSuddenDeathMs: options.tugOfWarSuddenDeathMs ?? TUG_OF_WAR_SUDDEN_DEATH_MS,
+      rudelDurationMs: options.rudelDurationMs ?? RUDEL_LIVE_DURATION_MS,
       now: options.now ?? (() => Date.now()),
     };
     this.startedAt = this.options.now();
@@ -188,11 +190,8 @@ export class GameServer {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
     }
-    for (const roundTimer of this.roundTimers.values()) {
-      clearTimeout(roundTimer.timer);
-    }
-    for (const botBarkTimer of this.botBarkTimers.values()) {
-      clearTimeout(botBarkTimer);
+    for (const interval of this.tickIntervalsByMatchId.values()) {
+      clearInterval(interval);
     }
     for (const session of this.sessionsByToken.values()) {
       if (session.disconnectGraceTimer) {
@@ -402,10 +401,6 @@ export class GameServer {
         this.calibrationByPlayerId.set(session.playerId, message.profile);
         return;
 
-      case "BARK_SUBMIT":
-        this.handleBarkSubmit(session, message.frames, now);
-        return;
-
       case "BARK_FRAME":
         this.handleBarkFrame(session, message.frame);
         return;
@@ -529,7 +524,7 @@ export class GameServer {
       this.broadcastToLobby(lobby.id, { type: "LOBBY_STATE", lobby: toSnapshot(lobby) });
       const [a, b] = lobby.players.map((p) => p.id);
       if (a && b) {
-        this.beginMatch(lobby.id, buildDuelPlayerOrder(a, b, TUG_OF_WAR_MAX_CYCLES), "carousel", now);
+        this.beginMatch(lobby.id, [a, b], "carousel", now);
       }
     }
   }
@@ -556,7 +551,7 @@ export class GameServer {
       this.lobbyIdByPlayerId.set(entry.player.id, lobby.id);
       this.lobbyIdByPlayerId.set(bot.id, lobby.id);
       this.broadcastToLobby(lobby.id, { type: "LOBBY_STATE", lobby: toSnapshot(lobby) });
-      this.beginMatch(lobby.id, buildDuelPlayerOrder(entry.player.id, bot.id, TUG_OF_WAR_MAX_CYCLES), "carousel", now);
+      this.beginMatch(lobby.id, [entry.player.id, bot.id], "carousel", now);
     }
   }
 
@@ -698,10 +693,16 @@ export class GameServer {
     const lobby = this.lobbies.get(lobbyId);
     // Live-Relay nur noetig, wenn der Empfaenger einen Bark-Synth rendert
     // (Kläffkarussell oder eine private Lobby mit abgeschaltetem "Echter Ton").
-    if (!lobby || lobby.audioMode !== "synth") {
-      return;
+    if (lobby && lobby.audioMode === "synth") {
+      this.broadcastToLobby(lobbyId, { type: "BARK_FRAME_BROADCAST", playerId: session.playerId, frame });
     }
-    this.broadcastToLobby(lobbyId, { type: "BARK_FRAME_BROADCAST", playerId: session.playerId, frame });
+    // Speist den rollierenden Puffer fuer die laufende Live-Wertung (siehe
+    // runLiveTick) - existiert nur, waehrend der Spieler an einem laufenden
+    // Match teilnimmt (angelegt in beginMatch, entfernt in finishLiveMatch).
+    const buffer = this.frameBufferByPlayerId.get(session.playerId);
+    if (buffer) {
+      buffer.push(frame);
+    }
   }
 
   private handleAudioBlobSubmit(session: ServerSession, message: Extract<ClientMessage, { type: "AUDIO_BLOB_SUBMIT" }>): void {
@@ -717,12 +718,11 @@ export class GameServer {
     }
     // Bewusst NICHT serverseitig zwischengespeichert (auch nicht kurz): direktes
     // Weiterreichen an die Lobby ist die konservativste Umsetzung von "nur
-    // in-memory, nie auf Disk, wird beim Rundenwechsel verworfen" - siehe
-    // BLOCKERS.md.
+    // in-memory, nie auf Disk" - siehe BLOCKERS.md.
     this.broadcastToLobby(lobbyId, {
       type: "AUDIO_BLOB_BROADCAST",
       playerId: session.playerId,
-      roundIndex: message.roundIndex,
+      chunkSeq: message.chunkSeq,
       mimeType: message.mimeType,
       dataBase64: message.dataBase64,
     });
@@ -763,7 +763,7 @@ export class GameServer {
 
   // --- Match-Flows -------------------------------------------------------
 
-  /** Waehlt Rundenreihenfolge + Match-Art passend zum Lobby-/Modus-Typ und startet das erste Match. */
+  /** Waehlt Teilnehmer + Match-Art passend zum Lobby-/Modus-Typ und startet das Live-Match. */
   private startMatchForLobby(lobby: Lobby, now: number): void {
     if (lobby.mode === "private" && lobby.matchMode === "bracket") {
       this.startBracket(lobby, now);
@@ -773,35 +773,168 @@ export class GameServer {
     if (lobby.mode === "carousel") {
       const [a, b] = playerIds;
       if (a && b) {
-        this.beginMatch(lobby.id, buildDuelPlayerOrder(a, b, TUG_OF_WAR_MAX_CYCLES), "carousel", now);
+        this.beginMatch(lobby.id, [a, b], "carousel", now);
       }
       return;
     }
     if (lobby.matchMode === "duell") {
       const [a, b] = playerIds;
       if (a && b) {
-        this.beginMatch(lobby.id, buildDuelPlayerOrder(a, b, TUG_OF_WAR_MAX_CYCLES), "duell", now);
+        this.beginMatch(lobby.id, [a, b], "duell", now);
       }
       return;
     }
     // "rudel" (auch Fallback, falls matchMode wider Erwarten null waere - lobby.ts
-    // laesst startPrivateLobby das aber nie zu).
-    this.beginMatch(lobby.id, buildRudelPlayerOrder(playerIds, RUDEL_CYCLES), "rudel", now);
+    // laesst startPrivateLobby das aber nie zu): alle gleichzeitig, siehe live-match.ts.
+    this.beginMatch(lobby.id, playerIds, "rudel", now);
   }
 
-  private beginMatch(lobbyId: LobbyId, playerOrder: readonly PlayerId[], kind: MatchKind, now: number): void {
-    const match = createMatchWithOrder(lobbyId, playerOrder, now);
+  private beginMatch(lobbyId: LobbyId, participantIds: readonly PlayerId[], kind: MatchKind, now: number): void {
+    const style = matchStyleForKind(kind);
+    const match = createLiveMatch(lobbyId, participantIds, style, now);
     this.matches.set(match.id, match);
     this.matchIdByLobbyId.set(lobbyId, match.id);
     this.matchKindByMatchId.set(match.id, kind);
+    for (const playerId of participantIds) {
+      this.frameBufferByPlayerId.set(playerId, []);
+    }
     this.broadcastToLobby(lobbyId, {
       type: "MATCH_STARTED",
       matchId: match.id,
-      playerOrder: [...match.playerOrder],
-      totalRounds: match.playerOrder.length,
-      style: matchStyleForKind(kind),
+      participantIds: [...participantIds],
+      style,
     });
-    this.startRound(match, lobbyId);
+    this.startLiveTick(match.id, lobbyId);
+  }
+
+  // --- Live-Tick (kein Knopf, kein Abwechseln - alle bellen durchgehend, siehe Auftrag) --
+
+  private startLiveTick(matchId: MatchId, lobbyId: LobbyId): void {
+    const existing = this.tickIntervalsByMatchId.get(matchId);
+    if (existing) {
+      clearInterval(existing);
+    }
+    const interval = setInterval(() => this.runLiveTick(matchId, lobbyId), this.options.liveTickIntervalMs);
+    interval.unref?.();
+    this.tickIntervalsByMatchId.set(matchId, interval);
+  }
+
+  private stopLiveTick(matchId: MatchId): void {
+    const interval = this.tickIntervalsByMatchId.get(matchId);
+    if (interval) {
+      clearInterval(interval);
+      this.tickIntervalsByMatchId.delete(matchId);
+    }
+  }
+
+  private runLiveTick(matchId: MatchId, lobbyId: LobbyId): void {
+    const match = this.matches.get(matchId);
+    const lobby = this.lobbies.get(lobbyId);
+    // Lobby verschwunden (z.B. alle Spieler haben verlassen) - Tick beenden
+    // statt fuer immer ins Leere zu broadcasten.
+    if (!match || match.phase === "finished" || !lobby) {
+      this.stopLiveTick(matchId);
+      this.matches.delete(matchId);
+      return;
+    }
+
+    const intensityByPlayer: Record<PlayerId, number> = {};
+    const flaggedPlayers: { playerId: PlayerId; flags: readonly AntiCheatFlag[] }[] = [];
+
+    for (const playerId of match.participantIds) {
+      const player = lobby.players.find((p) => p.id === playerId);
+      const isBot = player ? isBotPlayer(player) : false;
+      let frames: readonly AudioFrame[];
+      if (isBot && player?.botDifficulty) {
+        frames = this.nextBotFrames(matchId, playerId, player.botDifficulty);
+      } else {
+        frames = this.frameBufferByPlayerId.get(playerId) ?? [];
+        this.frameBufferByPlayerId.set(playerId, []);
+      }
+      const calibration = this.calibrationByPlayerId.get(playerId) ?? DEFAULT_CALIBRATION;
+      const { intensity, flags } = computeLiveIntensity(frames, calibration);
+      intensityByPlayer[playerId] = intensity;
+      if (flags.length > 0) {
+        flaggedPlayers.push({ playerId, flags });
+      }
+    }
+
+    const updated = applyLiveTick(match, intensityByPlayer);
+    this.matches.set(matchId, updated);
+
+    for (const { playerId, flags } of flaggedPlayers) {
+      this.broadcastToLobby(lobbyId, { type: "FLAG_BROADCAST", playerId, flags: [...flags] });
+    }
+
+    this.broadcastToLobby(lobbyId, {
+      type: "LIVE_MATCH_UPDATE",
+      scores: updated.participantIds.map((playerId) => ({ playerId, cumulativeScore: updated.cumulativeScores[playerId] ?? 0 })),
+      ropePosition: ropePositionOf(updated, this.options.tugOfWarThreshold),
+    });
+
+    const tuning = {
+      tugOfWarThreshold: this.options.tugOfWarThreshold,
+      suddenDeathMs: this.options.tugOfWarSuddenDeathMs,
+      rudelDurationMs: this.options.rudelDurationMs,
+    };
+    if (isLiveMatchFinished(updated, this.now(), tuning)) {
+      this.finishLiveMatch(matchId, lobbyId, updated, this.now());
+    }
+  }
+
+  private finishLiveMatch(matchId: MatchId, lobbyId: LobbyId, match: LiveMatchState, now: number): void {
+    this.stopLiveTick(matchId);
+    const finished: LiveMatchState = { ...match, phase: "finished", finishedAt: now };
+    this.matches.set(matchId, finished);
+    for (const playerId of match.participantIds) {
+      this.frameBufferByPlayerId.delete(playerId);
+      this.botStreamByKey.delete(`${matchId}:${playerId}`);
+    }
+    const kind = this.matchKindByMatchId.get(matchId) ?? "carousel";
+    this.matchKindByMatchId.delete(matchId);
+
+    if (kind === "bracket") {
+      this.handleBracketMatchupFinished(lobbyId, finished, now);
+      return;
+    }
+
+    this.broadcastToLobby(lobbyId, { type: "MATCH_RESULT", standings: computeLiveStandings(finished) });
+    const lobby = this.lobbies.get(lobbyId);
+    if (lobby) {
+      this.lobbies.set(lobbyId, { ...lobby, phase: "finished", updatedAt: now });
+    }
+  }
+
+  /**
+   * Erzeugt einen kontinuierlichen Bark/Pause-Strom fuer einen Bot: jede
+   * synthetische Bell-Sequenz (siehe generateSyntheticBarkFrames - bereits
+   * inklusive Vor-/Nach-Stille) wird als ein Zyklus wiederholt aneinander-
+   * gehaengt, mit fortlaufend neuem Seed pro Zyklus fuer natuerliche
+   * Variation. Laeuft durch dieselbe, unveraenderte computeLiveIntensity wie
+   * echte Spieler - kein zweiter Wertungspfad.
+   */
+  private nextBotFrames(matchId: MatchId, playerId: PlayerId, difficulty: BotDifficulty): AudioFrame[] {
+    const key = `${matchId}:${playerId}`;
+    let state = this.botStreamByKey.get(key);
+    if (!state) {
+      state = { frames: [], cursor: 0, cycleIndex: 0 };
+      this.botStreamByKey.set(key, state);
+    }
+    const framesPerTick = Math.max(1, Math.round(this.options.liveTickIntervalMs / BOT_FRAME_INTERVAL_MS));
+    const out: AudioFrame[] = [];
+    for (let i = 0; i < framesPerTick; i += 1) {
+      if (state.cursor >= state.frames.length) {
+        state.frames = generateSyntheticBarkFrames({ seed: `${key}:${state.cycleIndex}`, difficulty });
+        state.cycleIndex += 1;
+        state.cursor = 0;
+      }
+      const frame = state.frames[state.cursor];
+      if (frame) {
+        out.push(frame);
+      }
+      state.cursor += 1;
+    }
+    return out;
   }
 
   // --- Kläffduell (K.-o.-Bracket) ------------------------------------------
@@ -834,21 +967,16 @@ export class GameServer {
       return;
     }
     this.currentMatchupByLobbyId.set(lobbyId, nextMatchup.id);
-    this.beginMatch(
-      lobbyId,
-      buildDuelPlayerOrder(nextMatchup.playerA, nextMatchup.playerB, TUG_OF_WAR_MAX_CYCLES),
-      "bracket",
-      now,
-    );
+    this.beginMatch(lobbyId, [nextMatchup.playerA, nextMatchup.playerB], "bracket", now);
   }
 
-  private handleBracketMatchupFinished(lobbyId: LobbyId, match: Match, now: number): void {
+  private handleBracketMatchupFinished(lobbyId: LobbyId, match: LiveMatchState, now: number): void {
     const matchupId = this.currentMatchupByLobbyId.get(lobbyId);
     const bracket = this.bracketByLobbyId.get(lobbyId);
     if (!matchupId || !bracket) {
       return;
     }
-    const winnerId = computeTugOfWarState(match).winnerId;
+    const winnerId = computeLiveStandings(match)[0]?.playerId;
     if (!winnerId) {
       return;
     }
@@ -864,182 +992,15 @@ export class GameServer {
     if (!lobby) {
       return;
     }
-    const standings = computeBracketPlacements(bracket, lobby.players.map((p) => p.id));
+    const placements = computeBracketPlacements(bracket, lobby.players.map((p) => p.id));
     this.broadcastToLobby(lobbyId, {
       type: "MATCH_RESULT",
-      standings: standings.map((s) => ({ playerId: s.playerId, rank: s.rank, score: null, aggregateTotal: null })),
+      // Die Gesamt-Turnierplatzierung ergibt sich aus der K.-o.-Ausscheidungsrunde,
+      // nicht aus einem einzelnen cumulativeScore (das gilt nur pro Matchup) -
+      // hier bewusst 0, das Ranking selbst steckt in "rank".
+      standings: placements.map((p) => ({ playerId: p.playerId, rank: p.rank, cumulativeScore: 0 })),
     });
     this.lobbies.set(lobbyId, { ...lobby, phase: "finished", updatedAt: now });
-  }
-
-  // --- Runden ---------------------------------------------------------------
-
-  private startRound(match: Match, lobbyId: LobbyId): void {
-    const barkerId = currentBarker(match);
-    if (barkerId === null) {
-      return;
-    }
-    const windowMs = 3_000;
-    this.broadcastToLobby(lobbyId, {
-      type: "ROUND_STARTED",
-      roundIndex: match.currentRoundIndex,
-      barkerPlayerId: barkerId,
-      windowMs,
-    });
-
-    const existingTimer = this.roundTimers.get(match.id);
-    if (existingTimer) {
-      clearTimeout(existingTimer.timer);
-    }
-    const timer = setTimeout(() => {
-      this.handleRoundTimeout(match.id, match.currentRoundIndex, lobbyId);
-    }, this.options.roundTimeoutMs);
-    timer.unref?.();
-    this.roundTimers.set(match.id, { matchId: match.id, roundIndex: match.currentRoundIndex, timer });
-
-    this.maybeScheduleBotBark(match, lobbyId, barkerId);
-  }
-
-  /**
-   * Ist der aktuelle Barker ein Bot (kein Mikro, keine echte Session), bellt
-   * er von selbst nach einer kurzen, zufaelligen Verzoegerung - siehe
-   * Auftrag. Nutzt denselben Rundenablauf wie ein echter Spieler
-   * (finalizeRound), kein separater Match-Pfad fuer Bots.
-   */
-  private maybeScheduleBotBark(match: Match, lobbyId: LobbyId, barkerId: PlayerId): void {
-    const barker = this.lobbies.get(lobbyId)?.players.find((p) => p.id === barkerId);
-    if (!barker || !isBotPlayer(barker) || !barker.botDifficulty) {
-      return;
-    }
-    const difficulty = barker.botDifficulty;
-    const [minMs, maxMs] = this.options.botBarkDelayMs;
-    const delayMs = minMs + Math.random() * Math.max(0, maxMs - minMs);
-    const roundIndex = match.currentRoundIndex;
-    const matchId = match.id;
-
-    const existing = this.botBarkTimers.get(matchId);
-    if (existing) {
-      clearTimeout(existing);
-    }
-    const timer = setTimeout(() => {
-      this.botBarkTimers.delete(matchId);
-      this.submitBotBark(matchId, roundIndex, lobbyId, barkerId, difficulty);
-    }, delayMs);
-    timer.unref?.();
-    this.botBarkTimers.set(matchId, timer);
-  }
-
-  private submitBotBark(matchId: MatchId, roundIndex: number, lobbyId: LobbyId, barkerId: PlayerId, difficulty: BotDifficulty): void {
-    const match = this.matches.get(matchId);
-    if (!match || match.currentRoundIndex !== roundIndex || match.phase === "finished" || currentBarker(match) !== barkerId) {
-      return;
-    }
-    const timer = this.roundTimers.get(matchId);
-    if (timer) {
-      clearTimeout(timer.timer);
-      this.roundTimers.delete(matchId);
-    }
-    // Seed aus Match-ID + Rundenindex - reproduzierbar pro Runde, siehe
-    // generateSyntheticBarkFrames und packages/scoring/src/bot.ts.
-    const frames = generateSyntheticBarkFrames({ seed: `${matchId}:${roundIndex}`, difficulty });
-    this.finalizeRound(match, lobbyId, barkerId, frames, DEFAULT_CALIBRATION, this.now());
-  }
-
-  private handleRoundTimeout(matchId: MatchId, roundIndex: number, lobbyId: LobbyId): void {
-    const match = this.matches.get(matchId);
-    if (!match || match.currentRoundIndex !== roundIndex || match.phase === "finished") {
-      return;
-    }
-    const barkerId = currentBarker(match);
-    if (barkerId === null) {
-      return;
-    }
-    this.finalizeRound(match, lobbyId, barkerId, [], DEFAULT_CALIBRATION, this.now());
-  }
-
-  private handleBarkSubmit(session: ServerSession, framesInput: readonly AudioFrame[], now: number): void {
-    const lobbyId = this.lobbyIdByPlayerId.get(session.playerId);
-    const matchId = lobbyId ? this.matchIdByLobbyId.get(lobbyId) : undefined;
-    const match = matchId ? this.matches.get(matchId) : undefined;
-    if (!lobbyId || !match) {
-      return;
-    }
-    if (currentBarker(match) !== session.playerId) {
-      this.sendToSession(session, { type: "ERROR", code: "NOT_YOUR_TURN", message: "Du bist gerade nicht an der Reihe." });
-      return;
-    }
-    const timer = this.roundTimers.get(match.id);
-    if (timer) {
-      clearTimeout(timer.timer);
-      this.roundTimers.delete(match.id);
-    }
-    const calibration = this.calibrationByPlayerId.get(session.playerId) ?? DEFAULT_CALIBRATION;
-    this.finalizeRound(match, lobbyId, session.playerId, framesInput, calibration, now);
-  }
-
-  private finalizeRound(
-    match: Match,
-    lobbyId: LobbyId,
-    playerId: PlayerId,
-    frames: readonly AudioFrame[],
-    calibration: CalibrationProfile,
-    now: number,
-  ): void {
-    // Bot-Frames sind server-generiert und damit per Definition vertrauenswuerdig
-    // (siehe Auftrag) - keine REPLAY_SUSPECT-Historie fuer Bots, echte Spieler
-    // sind von dieser Zeile unberuehrt (Bedingung greift nur bei einem
-    // erkannten Bot-Spieler in genau dieser Lobby).
-    const barkerIsBot = isBotPlayer(this.lobbies.get(lobbyId)?.players.find((p) => p.id === playerId) ?? {});
-    const history = barkerIsBot ? [] : (this.envelopeHistoryByPlayerId.get(playerId) ?? []);
-    const score = scoreBark(frames, calibration, { previousRoundEnvelopes: history });
-
-    if (!barkerIsBot) {
-      const envelope = frames.map((f) => f.rmsDbfs);
-      const nextHistory = [...history, envelope].slice(-this.options.maxEnvelopeHistoryPerPlayer);
-      this.envelopeHistoryByPlayerId.set(playerId, nextHistory);
-    }
-
-    let updatedMatch: Match;
-    try {
-      updatedMatch = submitRoundResult(match, { playerId, roundIndex: match.currentRoundIndex, score, calibration }, now);
-    } catch (error) {
-      if (error instanceof MatchError) {
-        return;
-      }
-      throw error;
-    }
-    this.matches.set(updatedMatch.id, updatedMatch);
-
-    this.broadcastToLobby(lobbyId, { type: "ROUND_RESULT", roundIndex: match.currentRoundIndex, playerId, score: toWireScore(score) });
-    if (score.flags.length > 0) {
-      this.broadcastToLobby(lobbyId, { type: "FLAG_BROADCAST", playerId, flags: [...score.flags] });
-    }
-
-    const kind = this.matchKindByMatchId.get(updatedMatch.id) ?? "carousel";
-    // Kläffkarussell/Duell/Kläffduell-Matchup sind Tauzieh-Matches: sie enden,
-    // sobald das Seil die Schwelle erreicht (oder der Sudden-Death-Fallback
-    // greift), nicht erst wenn die (absichtlich sehr lange) Rundenreihenfolge
-    // ausgeht. Rudel bleibt bei fester Rundenzahl (isMatchFinished).
-    const finished = kind === "rudel" ? isMatchFinished(updatedMatch) : isTugOfWarFinished(updatedMatch);
-    if (!finished) {
-      this.startRound(updatedMatch, lobbyId);
-      return;
-    }
-
-    this.matchKindByMatchId.delete(updatedMatch.id);
-    this.roundTimers.delete(updatedMatch.id);
-
-    if (kind === "bracket") {
-      this.handleBracketMatchupFinished(lobbyId, updatedMatch, now);
-      return;
-    }
-
-    const standings = computeStandingsForKind(kind, updatedMatch);
-    this.broadcastToLobby(lobbyId, { type: "MATCH_RESULT", standings: standings.map(toWireStanding) });
-    const lobby = this.lobbies.get(lobbyId);
-    if (lobby) {
-      this.lobbies.set(lobbyId, { ...lobby, phase: "finished", updatedAt: now });
-    }
   }
 
   // --- Verbindung / Reconnect ---------------------------------------------
@@ -1171,17 +1132,6 @@ function markConnection(lobby: Lobby, playerId: PlayerId, connected: boolean, no
   };
 }
 
-function computeStandingsForKind(kind: MatchKind, match: Match): Standing[] {
-  switch (kind) {
-    case "rudel":
-      return computeAggregateStandings(match);
-    case "duell":
-    case "carousel":
-    default:
-      return computeTugOfWarStandings(match);
-  }
-}
-
 /**
  * Platzierung nach K.-o.-Ausscheidung: Champion zuerst, danach nach der
  * hoechsten erreichten Runde (spaeter ausgeschieden = besserer Platz).
@@ -1246,19 +1196,6 @@ function toSnapshot(lobby: Lobby): {
     countdownEndsAt: lobby.countdownEndsAt,
     matchMode: lobby.matchMode,
     audioMode: lobby.audioMode,
-  };
-}
-
-function toWireScore(score: BarkScore) {
-  return { ...score, flags: [...score.flags] };
-}
-
-function toWireStanding(standing: Standing) {
-  return {
-    playerId: standing.playerId,
-    rank: standing.rank,
-    score: standing.result ? toWireScore(standing.result.score) : null,
-    aggregateTotal: standing.aggregateTotal,
   };
 }
 
