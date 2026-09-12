@@ -37,6 +37,7 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/app ./app
 COPY --from=builder /app/server ./server
+COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/packages/scoring/src ./packages/scoring/src
 COPY --from=builder /app/packages/protocol/src ./packages/protocol/src
 COPY --from=builder /app/next.config.ts ./next.config.ts

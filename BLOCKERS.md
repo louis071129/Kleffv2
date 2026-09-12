@@ -483,3 +483,20 @@ der Liste stehende Waiter fing sie zuerst ab und loeste sein bereits verworfenes
 folgenlos auf, statt sie in den `received`-Puffer zu legen. Fix: der Waiter traegt sich bei
 seinem eigenen Timeout selbst aus der Liste aus, bevor er ablehnt. Kein Produktionscode
 betroffen, reiner Test-Harness-Bug, der vorher schlicht nie auf diese Weise getriggert wurde.
+
+## 2026-09-12 – Dockerfile: `lib/` fehlte im Produktions-Image, Deploy crashte sofort
+
+Erster echter Render-Deploy-Versuch durch den Besitzer schlug fehl: `Cannot find module
+'../lib/gate.js'`, Absturz beim Start. Ursache: `server/index.ts` importiert `../lib/gate.js`
+und wird zur Laufzeit direkt per `tsx` ausgefuehrt (kein Next-Build-Schritt dafuer) - die
+`runner`-Stage im Dockerfile kopierte bisher nur `app/`, `server/` und die beiden
+`packages/*/src`-Ordner, nicht `lib/`. Lokal (`npm run dev`/`npm start` ohne Docker) fiel das
+nie auf, weil dort das komplette Repo vorhanden ist - der Fehler existierte nur im schlanken
+Produktions-Image und wurde erst durch den echten Deploy sichtbar (kein Docker-Build-Test war
+Teil der bisherigen `npm run verify`-Kette). Fix: eine Zeile `COPY --from=builder /app/lib
+./lib` in der `runner`-Stage ergaenzt. Geprueft, dass `server/index.ts` und
+`server/game-server.ts` sonst nichts aus einem weiteren, nicht kopierten Ordner importieren
+(nur `@klaeff/scoring`/`@klaeff/protocol`, beide bereits kopiert) - kein weiterer blinder Fleck
+dieser Art gefunden. Docker selbst stand in dieser Session nicht zur Verfuegung, um den Build
+lokal nachzustellen; der Fix ist durch Lesen des Require-Pfads und Abgleich mit den
+`COPY`-Zeilen verifiziert, nicht durch einen lokalen Docker-Lauf.
